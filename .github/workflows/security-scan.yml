@@ -248,9 +248,8 @@ jobs:
         run: |
           # Clear any existing GitHub tokens from environment to avoid conflicts
           unset GITHUB_TOKEN
-          unset GH_TOKEN
           # Use token directly without environment variable conflicts
-          echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
           gh auth status
 
       # Step 5: Install GitHub Copilot CLI extension
@@ -261,7 +260,7 @@ jobs:
           gh --version
           
           # Authenticate GitHub CLI first
-          echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
           
           # Verify basic GitHub CLI authentication
           if gh auth status; then
@@ -306,7 +305,7 @@ jobs:
       # Step 5: Analyze vulnerabilities with GitHub Copilot
       - name: Generate fixes with GitHub Copilot
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           echo "🤖 Using GitHub Copilot to analyze and fix vulnerabilities..."
 
@@ -448,12 +447,6 @@ jobs:
             cat copilot-suggestions.txt >> copilot-analysis.md
             echo '```' >> copilot-analysis.md
           fi
-            
-            echo "✅ Test mode analysis completed" >> copilot-analysis.md
-            echo "## Test Mode Recommendations:" >> copilot-analysis.md
-            echo '```bash' >> copilot-analysis.md
-            echo '```' >> copilot-analysis.md
-          fi
           
           # Continue with the rest of the analysis - skip npm fixes generation since not needed
           echo "## Next Steps" >> copilot-analysis.md
@@ -539,7 +532,7 @@ jobs:
         id: create_branch
         if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Create unique branch name
           BRANCH_NAME="ai-security-fix-$(date +%Y%m%d-%H%M%S)"
