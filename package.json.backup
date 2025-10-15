@@ -1,0 +1,54 @@
+{
+  "name": "vulnerable-react-app",
+  "version": "1.0.0",
+  "description": "A React application with intentional security vulnerabilities for educational purposes",
+  "private": true,
+  "dependencies": {
+    "react": "^17.0.2",
+    "react-dom": "^17.0.2",
+    "react-router-dom": "^6.0.0",
+    "express": "^4.17.1",
+    "sqlite3": "^5.0.2",
+    "jsonwebtoken": "^8.5.1",
+    "cookie-parser": "^1.4.5",
+    "cors": "^2.8.5",
+    "body-parser": "^1.19.0",
+    "axios": "^0.24.0",
+    "lodash": "^4.17.20",
+    "serialize-javascript": "^5.0.1",
+    "express-session": "^1.17.2",
+    "bcrypt": "^5.0.1",
+    "multer": "^1.4.3",
+    "concurrently": "^6.3.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.15.5",
+    "@babel/preset-env": "^7.15.6",
+    "@babel/preset-react": "^7.14.5",
+    "babel-loader": "^8.2.2",
+    "webpack": "^5.52.1",
+    "webpack-cli": "^4.8.0",
+    "webpack-dev-server": "^4.2.1",
+    "html-webpack-plugin": "^5.3.2",
+    "css-loader": "^6.2.0",
+    "style-loader": "^3.2.1"
+  },
+  "scripts": {
+    "start": "webpack serve --mode development",
+    "build": "webpack --mode production",
+    "server": "node server/app.js",
+    "dev": "concurrently \"npm run server\" \"npm start\""
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}

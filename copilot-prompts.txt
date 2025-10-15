@@ -1,0 +1,13 @@
+Based on the security vulnerability report in vulnerability-data/vulnerability-context.md, please provide specific fixes for the Node.js/npm project vulnerabilities:
+
+1. Analyze each vulnerability and determine the best fix approach
+2. Generate specific npm commands to update vulnerable packages
+3. Identify any potential breaking changes or compatibility issues
+4. Suggest alternative packages if direct updates aren't available
+5. Provide code-level fixes if the vulnerabilities are in application code
+
+Focus on:
+- High and critical severity vulnerabilities
+- Dependency updates that maintain compatibility
+- Security best practices for Node.js applications
+- Minimal disruption to existing functionality
