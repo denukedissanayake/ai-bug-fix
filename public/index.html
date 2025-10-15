@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vulnerable React App</title>
+    <!-- VULNERABILITY: Missing CSP header -->
+    <!-- VULNERABILITY: Inline styles allowed -->
+    <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .container { max-width: 1200px; margin: 0 auto; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <!-- VULNERABILITY: Loading external scripts without integrity checks -->
+    <script src="https://unpkg.com/jquery@3.6.0/dist/jquery.min.js"></script>
+    
+    <!-- VULNERABILITY: Inline JavaScript -->
+    <script>
+        // Global variables exposed
+        window.DEBUG_MODE = true;
+        window.API_KEY = "sk-1234567890abcdef";
+    </script>
+</body>
+</html>
