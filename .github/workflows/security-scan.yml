@@ -261,34 +261,28 @@ jobs:
           echo "Using pre-installed GitHub CLI"
           gh --version
           
-          # Verify authentication
-          echo "Verifying GitHub CLI authentication..."
-          if gh auth status; then
-            echo "✅ GitHub CLI authenticated successfully"
-          else
-            echo "❌ GitHub CLI authentication failed"
-            echo "Auth status output:"
-            gh auth status || true
-            exit 1
-          fi
-          
           # Configure git credentials to use the token
           git config --global credential.helper store
           echo "https://x-access-token:${{ secrets.GH_TOKEN }}@github.com" > ~/.git-credentials
           
-          # Try to install GitHub Copilot CLI extension (with proper error handling)
+          # Try to install GitHub Copilot CLI extension
           echo "Installing GitHub Copilot CLI extension..."
-          if gh extension install github/gh-copilot 2>/dev/null || gh extension list | grep -q "gh-copilot"; then
-            echo "✅ GitHub Copilot CLI extension available"
-            
-            # Test Copilot CLI functionality
-            if gh copilot --help >/dev/null 2>&1; then
-              echo "✅ GitHub Copilot CLI is working"
-            else
-              echo "⚠️ GitHub Copilot CLI installed but not functional (may require subscription)"
-            fi
+          gh extension install github/gh-copilot 2>/dev/null || gh extension list | grep -q "gh-copilot"
+          
+          # Set up Copilot auth token directly (workaround for headless environment)
+          echo "Setting up Copilot authentication..."
+          mkdir -p ~/.config/gh
+          echo '{"hosts":{"github.com":{"oauth_token":"${{ secrets.GH_TOKEN }}","user":"${{ github.repository_owner }}"}}}' > ~/.config/gh/hosts.yml
+          
+          # For Copilot CLI specifically
+          mkdir -p ~/.config/gh/copilot
+          echo '{"token":"${{ secrets.GH_TOKEN }}","user":"${{ github.repository_owner }}"}' > ~/.config/gh/copilot/config.json
+          
+          # Test Copilot CLI functionality
+          if gh copilot --help >/dev/null 2>&1; then
+            echo "✅ GitHub Copilot CLI is working"
           else
-            echo "⚠️ GitHub Copilot CLI extension installation failed or not available"
+            echo "⚠️ GitHub Copilot CLI installed but not functional"
           fi
           
           # Debug information
