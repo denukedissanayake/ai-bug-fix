@@ -380,6 +380,12 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Actions (AI-Inspired)"
           
+          # Create repository labels if they don't exist
+          echo "Setting up repository labels..."
+          gh label create "security" --description "Security-related changes" --color "d73a4a" --force || echo "Security label already exists or couldn't be created"
+          gh label create "ai-inspired" --description "AI-generated or AI-inspired changes" --color "0052cc" --force || echo "AI-inspired label already exists or couldn't be created"
+          gh label create "automated-fix" --description "Automated fixes applied" --color "1d76db" --force || echo "Automated-fix label already exists or couldn't be created"
+          
           # Create a new branch for the security fix
           BRANCH_NAME="ai-security-fix-$(date +%Y%m%d-%H%M%S)"
           git checkout -b $BRANCH_NAME
@@ -453,13 +459,22 @@ jobs:
           **🤖 AI-Inspired Analysis:** This fix represents intelligent analysis of security vulnerabilities to provide context-aware security updates."
           
           # Create the PR using GitHub CLI
-          gh pr create \
+          echo "Creating pull request..."
+          PR_URL=$(gh pr create \
             --title "🤖🔒 AI-Inspired: Intelligent security fixes $(date +%Y-%m-%d)" \
             --body "$PR_DESCRIPTION" \
             --head $BRANCH_NAME \
             --base main \
-            --label "security,ai-inspired,automated-fix" \
-            --reviewer "denukedissanayake"
+            --reviewer "denukedissanayake" 2>&1) || echo "PR creation may have had issues with labels"
+          
+          # Try to add labels after PR creation (more robust)
+          echo "Attempting to add labels..."
+          gh pr edit $BRANCH_NAME --add-label "security" 2>/dev/null || echo "Could not add 'security' label - label may not exist"
+          gh pr edit $BRANCH_NAME --add-label "ai-inspired" 2>/dev/null || echo "Could not add 'ai-inspired' label - label may not exist"
+          gh pr edit $BRANCH_NAME --add-label "automated-fix" 2>/dev/null || echo "Could not add 'automated-fix' label - label may not exist"
+          
+          echo "Pull request created successfully"
+          echo "$PR_URL"
 
       # Step 9: Upload comprehensive artifacts
       - name: Upload fix artifacts
