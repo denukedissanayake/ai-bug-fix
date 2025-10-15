@@ -306,14 +306,19 @@ jobs:
             printf "**Dependency Path:** %s\n\n" "$DEPENDENCY_PATH" >> issue_body.md
             printf "### 📝 Description\n%s\n\n" "$DESCRIPTION" >> issue_body.md
             printf "### 🔧 Fix Information\n" >> issue_body.md
-            printf "- **Upgradable:** %s\n" "$IS_UPGRADABLE" >> issue_body.md
-            printf "- **Patchable:** %s\n" "$IS_PATCHABLE" >> issue_body.md
+            printf -- "- **Upgradable:** %s\n" "$IS_UPGRADABLE" >> issue_body.md
+            printf -- "- **Patchable:** %s\n" "$IS_PATCHABLE" >> issue_body.md
             if [ "$FIXED_VERSION" != "No direct fix available" ]; then
-              printf "- **Recommended Fix:** Update to version %s\n\n" "$FIXED_VERSION" >> issue_body.md
+              printf -- "- **Recommended Fix:** Update to version %s\n\n" "$FIXED_VERSION" >> issue_body.md
             else
-              printf "- **Recommended Fix:** Review alternatives or apply manual patches\n\n" >> issue_body.md
+              printf -- "- **Recommended Fix:** Review alternatives or apply manual patches\n\n" >> issue_body.md
             fi
-            printf "### 📚 References\n%s\n\n" "$REFERENCES" >> issue_body.md
+            printf "### 📚 References\n" >> issue_body.md
+            if [ -n "$REFERENCES" ] && [ "$REFERENCES" != "No references available" ]; then
+              printf "%s\n\n" "$REFERENCES" >> issue_body.md
+            else
+              printf "No references available\n\n" >> issue_body.md
+            fi
             printf "### 🤖 AI Fix Request\n" >> issue_body.md
             printf "Github-copilot, please help fix this %s severity vulnerability in %s.\n\n" "$SEVERITY" "$PACKAGE_NAME" >> issue_body.md
             printf "**Specific requests:**\n" >> issue_body.md
@@ -422,26 +427,26 @@ jobs:
           
           printf "### 📊 Vulnerability Summary\n" >> tracking_body.md
           if [ -f vulnerability-issues.md ]; then
-            cat vulnerability-issues.md | tail -n +5 >> tracking_body.md || printf "No vulnerability details available\n" >> tracking_body.md
+            tail -n +5 vulnerability-issues.md >> tracking_body.md 2>/dev/null || printf "No vulnerability details available\n" >> tracking_body.md
           else
             printf "No vulnerability details available\n" >> tracking_body.md
           fi
           printf "\n" >> tracking_body.md
           
           printf "### 🎯 Action Items\n" >> tracking_body.md
-          printf "- [ ] Review all created vulnerability issues\n" >> tracking_body.md
-          printf "- [ ] Prioritize critical and high severity vulnerabilities\n" >> tracking_body.md
-          printf "- [ ] Apply fixes suggested by GitHub Copilot\n" >> tracking_body.md
-          printf "- [ ] Test fixes in development environment\n" >> tracking_body.md
-          printf "- [ ] Deploy fixes to production\n" >> tracking_body.md
-          printf "- [ ] Close resolved vulnerability issues\n\n" >> tracking_body.md
+          printf -- "- [ ] Review all created vulnerability issues\n" >> tracking_body.md
+          printf -- "- [ ] Prioritize critical and high severity vulnerabilities\n" >> tracking_body.md
+          printf -- "- [ ] Apply fixes suggested by GitHub Copilot\n" >> tracking_body.md
+          printf -- "- [ ] Test fixes in development environment\n" >> tracking_body.md
+          printf -- "- [ ] Deploy fixes to production\n" >> tracking_body.md
+          printf -- "- [ ] Close resolved vulnerability issues\n\n" >> tracking_body.md
           
           printf "### 🤖 AI Assistance\n" >> tracking_body.md
           printf "All individual vulnerability issues have been tagged with \`ai-fix-requested\` and include specific requests for GitHub Copilot assistance. Each issue contains:\n" >> tracking_body.md
-          printf "- Detailed vulnerability analysis\n" >> tracking_body.md
-          printf "- Copilot fix requests with specific questions\n" >> tracking_body.md
-          printf "- Upgrade path recommendations\n" >> tracking_body.md
-          printf "- Alternative solution suggestions\n\n" >> tracking_body.md
+          printf -- "- Detailed vulnerability analysis\n" >> tracking_body.md
+          printf -- "- Copilot fix requests with specific questions\n" >> tracking_body.md
+          printf -- "- Upgrade path recommendations\n" >> tracking_body.md
+          printf -- "- Alternative solution suggestions\n\n" >> tracking_body.md
           
           printf "### 📈 Progress Tracking\n" >> tracking_body.md
           printf "Use this issue to track the overall progress of fixing the %s vulnerabilities detected in this scan.\n\n" "$VULN_COUNT" >> tracking_body.md
