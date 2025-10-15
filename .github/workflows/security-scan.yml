@@ -247,7 +247,7 @@ jobs:
       - name: Install GitHub CLI and Setup Authentication
         env:
           # Use the built-in GITHUB_TOKEN which has proper permissions
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # GitHub CLI is pre-installed in ubuntu-latest runners
           echo "Using pre-installed GitHub CLI"
@@ -274,7 +274,7 @@ jobs:
           
           # Configure git credentials to use the token
           git config --global credential.helper store
-          echo "https://x-access-token:${{ github.token }}@github.com" > ~/.git-credentials
+          echo "https://x-access-token:${{ secrets.GH_TOKEN }}@github.com" > ~/.git-credentials
           
           # Try to install GitHub Copilot CLI extension (with proper error handling)
           echo "Installing GitHub Copilot CLI extension..."
@@ -303,7 +303,7 @@ jobs:
       # Step 5: Analyze vulnerabilities with GitHub Copilot
       - name: Generate fixes with GitHub Copilot
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           echo "🤖 Using GitHub Copilot to analyze and fix vulnerabilities..."
           
@@ -506,7 +506,7 @@ jobs:
       - name: Create AI-Inspired Security Fix PR
         if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # Configure git
           git config --local user.email "action@github.com"
@@ -616,7 +616,7 @@ jobs:
         id: create_branch
         if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # Create unique branch name
           BRANCH_NAME="ai-security-fix-$(date +%Y%m%d-%H%M%S)"
@@ -798,7 +798,7 @@ jobs:
       # Step 5: Install GitHub CLI
       - name: Install GitHub CLI
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # Ensure GitHub CLI is installed
           if ! command -v gh &> /dev/null; then
@@ -834,7 +834,7 @@ jobs:
       - name: Create security fix branch and commit
         id: create_branch
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # Create unique branch name
           BRANCH_NAME="ai-security-fix-$(date +%Y%m%d-%H%M%S)"
