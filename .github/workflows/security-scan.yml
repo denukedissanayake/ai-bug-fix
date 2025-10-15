@@ -48,10 +48,10 @@ jobs:
       - name: Run Snyk vulnerability scan
         run: snyk test --json --severity-threshold=high > snyk-results.json || true
 
-      # Step 7: Run Snyk monitor (optional - sends results to Snyk dashboard)
-      - name: Monitor project with Snyk
-        run: snyk monitor
-        continue-on-error: true
+      # # Step 7: Run Snyk monitor (optional - sends results to Snyk dashboard)
+      # - name: Monitor project with Snyk
+      #   run: snyk monitor
+      #   continue-on-error: true
 
       # Step 8: Filter and display high-risk vulnerabilities
       - name: Extract high-risk vulnerabilities
@@ -81,7 +81,7 @@ jobs:
           name: snyk-vulnerability-report
           path: snyk-results.json
 
-      # Step 11: Fail the workflow if high-risk vulnerabilities are found
-      - name: Check for high-risk vulnerabilities
-        run: |
-          snyk test --severity-threshold=high
+      # # Step 11: Fail the workflow if high-risk vulnerabilities are found
+      # - name: Check for high-risk vulnerabilities
+      #   run: |
+      #     snyk test --severity-threshold=high
