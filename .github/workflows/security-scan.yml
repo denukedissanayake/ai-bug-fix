@@ -254,6 +254,8 @@ jobs:
           gh label create "high-priority" --description "High priority issue" --color "ff6b6b" --force || echo "High-priority label exists"
           gh label create "critical" --description "Critical severity issue" --color "d10000" --force || echo "Critical label exists"
           gh label create "ai-fix-requested" --description "AI assistance requested for fix" --color "0052cc" --force || echo "AI-fix-requested label exists"
+          gh label create "copilot-task" --description "Task assigned to GitHub Copilot" --color "0366d6" --force || echo "Copilot-task label exists"
+          gh label create "scheduled" --description "Automatically scheduled task" --color "7057ff" --force || echo "Scheduled label exists"
           
           # Check if vulnerabilities file exists and has content
           if [ ! -f "vulnerability-data/detailed-vulnerabilities.json" ]; then
@@ -333,7 +335,7 @@ jobs:
             printf "*Scan run: %s*\n" "${{ github.run_id }}" >> issue_body.md
             
             # Determine labels based on severity
-            LABELS="security,vulnerability,ai-fix-requested"
+            LABELS="security,vulnerability,ai-fix-requested,copilot-task,scheduled"
             case "$SEVERITY" in
               "CRITICAL")
                 LABELS="$LABELS,critical,high-priority"
@@ -529,20 +531,299 @@ jobs:
           if TRACKING_URL=$(gh issue create \
             --title "$TRACKING_TITLE" \
             --body-file tracking_body.md \
-            --label "security,vulnerability,tracking,ai-fix-requested" \
+            --label "security,vulnerability,tracking,ai-fix-requested,copilot-task,scheduled" \
             2>/dev/null); then
             
             echo "✅ Created tracking issue: $TRACKING_URL"
             TRACKING_NUMBER=$(echo "$TRACKING_URL" | grep -o '[0-9]*$')
             
+            # Assign tracking issue to GitHub Copilot SWE agent using GraphQL
+            echo "🤖 Attempting to assign tracking issue #$TRACKING_NUMBER to GitHub Copilot..."
+            
+            # Create GraphQL query to find Copilot SWE agent
+            FIND_COPILOT_QUERY='{
+              "query": "query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 100) { nodes { login __typename ... on Bot { id } ... on User { id } } } } }",
+              "variables": {
+                "owner": "${{ github.repository_owner }}",
+                "repo": "${{ github.event.repository.name }}"
+              }
+            }'
+            
+            # Execute GraphQL query to find Copilot
+            COPILOT_RESPONSE=$(gh api graphql --input - <<< "$FIND_COPILOT_QUERY" 2>/dev/null || echo "")
+            
+            if [ -n "$COPILOT_RESPONSE" ]; then
+              # Extract Copilot actor ID
+              COPILOT_ID=$(echo "$COPILOT_RESPONSE" | jq -r '.data.repository.suggestedActors.nodes[] | select(.login == "copilot-swe-agent") | .id' 2>/dev/null || echo "")
+              
+              if [ -n "$COPILOT_ID" ] && [ "$COPILOT_ID" != "null" ]; then
+                echo "✅ Found Copilot SWE agent with ID: $COPILOT_ID"
+                
+                # Get tracking issue GraphQL ID
+                GET_ISSUE_QUERY='{
+                  "query": "query($owner: String!, $repo: String!, $issueNumber: Int!) { repository(owner: $owner, name: $repo) { issue(number: $issueNumber) { id } } }",
+                  "variables": {
+                    "owner": "${{ github.repository_owner }}",
+                    "repo": "${{ github.event.repository.name }}",
+                    "issueNumber": '$TRACKING_NUMBER'
+                  }
+                }'
+                
+                ISSUE_RESPONSE=$(gh api graphql --input - <<< "$GET_ISSUE_QUERY" 2>/dev/null || echo "")
+                ISSUE_ID=$(echo "$ISSUE_RESPONSE" | jq -r '.data.repository.issue.id' 2>/dev/null || echo "")
+                
+                if [ -n "$ISSUE_ID" ] && [ "$ISSUE_ID" != "null" ]; then
+                  # Assign tracking issue to Copilot using GraphQL mutation
+                  ASSIGN_MUTATION='{
+                    "query": "mutation($issueId: ID!, $actorId: ID!) { replaceActorsForAssignable(input: {assignableId: $issueId, actorIds: [$actorId]}) { assignable { ... on Issue { id title assignees(first: 10) { nodes { login } } } } } }",
+                    "variables": {
+                      "issueId": "'$ISSUE_ID'",
+                      "actorId": "'$COPILOT_ID'"
+                    }
+                  }'
+                  
+                  ASSIGN_RESPONSE=$(gh api graphql --input - <<< "$ASSIGN_MUTATION" 2>/dev/null || echo "")
+                  
+                  if [ -n "$ASSIGN_RESPONSE" ]; then
+                    ASSIGNEES=$(echo "$ASSIGN_RESPONSE" | jq -r '.data.replaceActorsForAssignable.assignable.assignees.nodes[].login' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+                    echo "✅ Successfully assigned tracking issue #$TRACKING_NUMBER to Copilot"
+                    echo "Assignees: $ASSIGNEES"
+                  else
+                    echo "⚠️ Failed to assign tracking issue to Copilot (mutation failed)"
+                  fi
+                else
+                  echo "⚠️ Failed to get tracking issue GraphQL ID"
+                fi
+              else
+                echo "⚠️ Copilot SWE agent not found in repository suggested actors"
+                echo "Note: GitHub Copilot may not be enabled for this repository"
+              fi
+            else
+              echo "⚠️ Failed to query repository suggested actors"
+            fi
+            
             # Pin the tracking issue if possible
             gh issue pin "$TRACKING_NUMBER" 2>/dev/null || echo "⚠️ Could not pin tracking issue (may not have permissions)"
+            
+            # Add Copilot coordination comment to tracking issue
+            printf "## 🤖 GitHub Copilot Coordination Request\n\n" > tracking_copilot_comment.md
+            printf "@github-copilot please coordinate the resolution of %s security vulnerabilities detected in this scan:\n\n" "$VULN_COUNT" >> tracking_copilot_comment.md
+            printf "**Master Coordination Tasks:**\n" >> tracking_copilot_comment.md
+            printf "1. **Priority Assessment:** Review all %s vulnerability issues and recommend fixing order\n" "$VULN_COUNT" >> tracking_copilot_comment.md
+            printf "2. **Dependency Analysis:** Check for conflicts between vulnerability fixes\n" >> tracking_copilot_comment.md
+            printf "3. **Batch Processing:** Suggest which vulnerabilities can be fixed together safely\n" >> tracking_copilot_comment.md
+            printf "4. **Risk Assessment:** Identify which fixes have highest impact vs. risk\n" >> tracking_copilot_comment.md
+            printf "5. **Testing Strategy:** Recommend comprehensive testing approach for all fixes\n\n" >> tracking_copilot_comment.md
+            printf "**Individual Issue Actions:**\n" >> tracking_copilot_comment.md
+            printf "- Each vulnerability has its own issue with specific fix requests\n" >> tracking_copilot_comment.md
+            printf "- All issues are labeled with \`copilot-task\` for your attention\n" >> tracking_copilot_comment.md
+            printf "- Please provide specific npm/yarn commands for each vulnerability\n" >> tracking_copilot_comment.md
+            printf "- Include compatibility and breaking change analysis\n\n" >> tracking_copilot_comment.md
+            printf "**Expected Deliverables:**\n" >> tracking_copilot_comment.md
+            printf "1. **Fix Priority Matrix:** Order of vulnerability resolution\n" >> tracking_copilot_comment.md
+            printf "2. **Batch Fix Commands:** Grouped update commands where safe\n" >> tracking_copilot_comment.md
+            printf "3. **Testing Checklist:** What to verify after each fix\n" >> tracking_copilot_comment.md
+            printf "4. **Rollback Plan:** How to revert if fixes cause issues\n\n" >> tracking_copilot_comment.md
+            printf "**Scan Details:**\n" >> tracking_copilot_comment.md
+            printf "- **Workflow Run:** [%s](%s/%s/actions/runs/%s)\n" "${{ github.run_id }}" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" >> tracking_copilot_comment.md
+            printf "- **Scan Date:** %s\n" "$(date)" >> tracking_copilot_comment.md
+            printf "- **Repository:** %s\n\n" "${{ github.repository }}" >> tracking_copilot_comment.md
+            printf "Please coordinate responses across all vulnerability issues and provide an overall fix strategy here.\n\n" >> tracking_copilot_comment.md
+            printf "*This is an automated coordination request from the AI Security Scan workflow*\n" >> tracking_copilot_comment.md
+            
+            # Add the Copilot coordination comment
+            if gh issue comment "$TRACKING_NUMBER" --body-file tracking_copilot_comment.md 2>/dev/null; then
+              echo "✅ Added Copilot coordination comment to tracking issue #$TRACKING_NUMBER"
+            else
+              echo "⚠️ Failed to add Copilot coordination comment to tracking issue #$TRACKING_NUMBER"
+            fi
             
           else
             echo "❌ Failed to create tracking issue"
           fi
 
-      # Step 6: Upload issue creation artifacts
+      # Step 7: Create consolidated vulnerability report issue
+      - name: Create consolidated vulnerability report
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "📋 Creating consolidated vulnerability report issue..."
+          
+          VULN_COUNT=$(jq 'length' vulnerability-data/detailed-vulnerabilities.json 2>/dev/null || echo "0")
+          
+          if [ "$VULN_COUNT" -gt 0 ]; then
+            # Create comprehensive vulnerability report for Copilot
+            printf "# Security Vulnerability Analysis Report\n\n" > vulnerability_report.md
+            printf "**Repository:** %s\n" "${{ github.repository }}" >> vulnerability_report.md
+            printf "**Scan Date:** %s\n" "$(date)" >> vulnerability_report.md
+            printf "**Workflow Run:** [%s](%s/%s/actions/runs/%s)\n" "${{ github.run_id }}" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" >> vulnerability_report.md
+            printf "**Total Vulnerabilities:** %s\n\n" "$VULN_COUNT" >> vulnerability_report.md
+            
+            # Add detailed vulnerability information
+            printf "## 🔍 Detected Vulnerabilities\n\n" >> vulnerability_report.md
+            
+            # Process each vulnerability individually to avoid YAML issues
+            jq -c '.[]' vulnerability-data/detailed-vulnerabilities.json | while IFS= read -r vuln; do
+              VULN_TITLE=$(echo "$vuln" | jq -r '.title // "Unknown Vulnerability"')
+              SEVERITY=$(echo "$vuln" | jq -r '.severity // "unknown"' | tr '[:lower:]' '[:upper:]')
+              PACKAGE_NAME=$(echo "$vuln" | jq -r '.packageName // "unknown"')
+              VERSION=$(echo "$vuln" | jq -r '.version // "unknown"')
+              VULN_ID=$(echo "$vuln" | jq -r '.id // "N/A"')
+              CVSS_SCORE=$(echo "$vuln" | jq -r '.CVSSv3 // "N/A"')
+              FIXED_VERSION=$(echo "$vuln" | jq -r '.nearestFixedInVersion // "No direct fix available"')
+              IS_UPGRADABLE=$(echo "$vuln" | jq -r '.isUpgradable // false')
+              IS_PATCHABLE=$(echo "$vuln" | jq -r '.isPatchable // false')
+              DESCRIPTION=$(echo "$vuln" | jq -r '.description // "No description available"')
+              DEPENDENCY_PATH=$(echo "$vuln" | jq -r 'if .from then (.from | if type == "array" then join(" → ") else tostring end) else "Direct dependency" end')
+              
+              printf "### %s (%s)\n\n" "$VULN_TITLE" "$SEVERITY" >> vulnerability_report.md
+              printf "**Package:** \`%s@%s\`\n" "$PACKAGE_NAME" "$VERSION" >> vulnerability_report.md
+              printf "**CVE ID:** %s\n" "$VULN_ID" >> vulnerability_report.md
+              printf "**CVSS Score:** %s\n" "$CVSS_SCORE" >> vulnerability_report.md
+              printf "**Fixed In:** \`%s\`\n" "$FIXED_VERSION" >> vulnerability_report.md
+              printf "**Upgradable:** %s\n" "$IS_UPGRADABLE" >> vulnerability_report.md
+              printf "**Patchable:** %s\n" "$IS_PATCHABLE" >> vulnerability_report.md
+              printf "**Dependency Path:** %s\n\n" "$DEPENDENCY_PATH" >> vulnerability_report.md
+              printf "**Description:** %s\n\n" "$DESCRIPTION" >> vulnerability_report.md
+              printf "**Fix Command Needed:**\n" >> vulnerability_report.md
+              printf "\`\`\`bash\n" >> vulnerability_report.md
+              printf "# Please provide specific npm/yarn command to fix this vulnerability\n" >> vulnerability_report.md
+              printf "npm update %s\n" "$PACKAGE_NAME" >> vulnerability_report.md
+              printf "# Or alternative fix approach\n" >> vulnerability_report.md
+              printf "\`\`\`\n\n" >> vulnerability_report.md
+              printf -- "---\n\n" >> vulnerability_report.md
+            done
+            
+            # Create the consolidated issue using GitHub CLI (simpler approach)
+            ISSUE_TITLE="Vulnerability Scan Update - $(date +%Y-%m-%d)"
+            
+            # Create issue with proper labeling
+            if CONSOLIDATED_URL=$(gh issue create \
+              --title "$ISSUE_TITLE" \
+              --body-file vulnerability_report.md \
+              --label "copilot-task,scheduled,vulnerability-scan,security,ai-fix-requested,high-priority" \
+              2>/dev/null); then
+              
+              echo "✅ Created consolidated issue: $CONSOLIDATED_URL"
+              CONSOLIDATED_NUMBER=$(echo "$CONSOLIDATED_URL" | grep -o '[0-9]*$')
+              
+              # Assign to GitHub Copilot using the same GraphQL approach
+              echo "🤖 Attempting to assign consolidated issue #$CONSOLIDATED_NUMBER to GitHub Copilot..."
+              
+              # Create GraphQL query to find Copilot SWE agent
+              FIND_COPILOT_QUERY='{
+                "query": "query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 100) { nodes { login __typename ... on Bot { id } ... on User { id } } } } }",
+                "variables": {
+                  "owner": "${{ github.repository_owner }}",
+                  "repo": "${{ github.event.repository.name }}"
+                }
+              }'
+              
+              # Execute GraphQL query to find Copilot
+              COPILOT_RESPONSE=$(gh api graphql --input - <<< "$FIND_COPILOT_QUERY" 2>/dev/null || echo "")
+              
+              if [ -n "$COPILOT_RESPONSE" ]; then
+                # Extract Copilot actor ID
+                COPILOT_ID=$(echo "$COPILOT_RESPONSE" | jq -r '.data.repository.suggestedActors.nodes[] | select(.login == "copilot-swe-agent") | .id' 2>/dev/null || echo "")
+                
+                if [ -n "$COPILOT_ID" ] && [ "$COPILOT_ID" != "null" ]; then
+                  echo "✅ Found Copilot SWE agent with ID: $COPILOT_ID"
+                  
+                  # Get issue GraphQL ID
+                  GET_ISSUE_QUERY='{
+                    "query": "query($owner: String!, $repo: String!, $issueNumber: Int!) { repository(owner: $owner, name: $repo) { issue(number: $issueNumber) { id } } }",
+                    "variables": {
+                      "owner": "${{ github.repository_owner }}",
+                      "repo": "${{ github.event.repository.name }}",
+                      "issueNumber": '$CONSOLIDATED_NUMBER'
+                    }
+                  }'
+                  
+                  ISSUE_RESPONSE=$(gh api graphql --input - <<< "$GET_ISSUE_QUERY" 2>/dev/null || echo "")
+                  ISSUE_ID=$(echo "$ISSUE_RESPONSE" | jq -r '.data.repository.issue.id' 2>/dev/null || echo "")
+                  
+                  if [ -n "$ISSUE_ID" ] && [ "$ISSUE_ID" != "null" ]; then
+                    # Assign issue to Copilot using GraphQL mutation
+                    ASSIGN_MUTATION='{
+                      "query": "mutation($issueId: ID!, $actorId: ID!) { replaceActorsForAssignable(input: {assignableId: $issueId, actorIds: [$actorId]}) { assignable { ... on Issue { id title assignees(first: 10) { nodes { login } } } } } }",
+                      "variables": {
+                        "issueId": "'$ISSUE_ID'",
+                        "actorId": "'$COPILOT_ID'"
+                      }
+                    }'
+                    
+                    ASSIGN_RESPONSE=$(gh api graphql --input - <<< "$ASSIGN_MUTATION" 2>/dev/null || echo "")
+                    
+                    if [ -n "$ASSIGN_RESPONSE" ]; then
+                      ASSIGNEES=$(echo "$ASSIGN_RESPONSE" | jq -r '.data.replaceActorsForAssignable.assignable.assignees.nodes[].login' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+                      echo "✅ Successfully assigned consolidated issue #$CONSOLIDATED_NUMBER to Copilot"
+                      echo "Assignees: $ASSIGNEES"
+                    else
+                      echo "⚠️ Failed to assign consolidated issue to Copilot (mutation failed)"
+                    fi
+                  else
+                    echo "⚠️ Failed to get consolidated issue GraphQL ID"
+                  fi
+                else
+                  echo "⚠️ Copilot SWE agent not found in repository suggested actors"
+                  echo "Note: GitHub Copilot may not be enabled for this repository"
+                fi
+              else
+                echo "⚠️ Failed to query repository suggested actors"
+              fi
+              
+              # Add comprehensive Copilot comment
+              printf "## 🤖 GitHub Copilot Comprehensive Fix Request\n\n" > consolidated_comment.md
+              printf "@github-copilot please analyze and fix the %s security vulnerabilities detected in this scan:\n\n" "$VULN_COUNT" >> consolidated_comment.md
+              printf "### 🎯 Primary Objectives:\n" >> consolidated_comment.md
+              printf "1. **Immediate Fixes:** Provide specific npm/yarn commands for each vulnerability\n" >> consolidated_comment.md
+              printf "2. **Risk Assessment:** Evaluate the security impact of each vulnerability\n" >> consolidated_comment.md
+              printf "3. **Compatibility Analysis:** Check for breaking changes in proposed fixes\n" >> consolidated_comment.md
+              printf "4. **Testing Strategy:** Recommend verification steps for each fix\n" >> consolidated_comment.md
+              printf "5. **Alternative Solutions:** Suggest alternatives if direct updates aren't safe\n\n" >> consolidated_comment.md
+              printf "### 📋 Required Actions:\n" >> consolidated_comment.md
+              printf "- Review each vulnerability listed in the report above\n" >> consolidated_comment.md
+              printf "- Provide specific fix commands (npm update, npm install, etc.)\n" >> consolidated_comment.md
+              printf "- Identify any dependencies that require manual intervention\n" >> consolidated_comment.md
+              printf "- Suggest batch processing approach for multiple fixes\n" >> consolidated_comment.md
+              printf "- Recommend testing procedures before production deployment\n\n" >> consolidated_comment.md
+              printf "### 🔧 Expected Response Format:\n" >> consolidated_comment.md
+              printf "\`\`\`bash\n" >> consolidated_comment.md
+              printf "# High Priority Fixes (Critical/High severity)\n" >> consolidated_comment.md
+              printf "npm audit fix --force\n" >> consolidated_comment.md
+              printf "npm update package-name@version\n\n" >> consolidated_comment.md
+              printf "# Individual package fixes\n" >> consolidated_comment.md
+              printf "npm install package-name@fixed-version\n" >> consolidated_comment.md
+              printf "\`\`\`\n\n" >> consolidated_comment.md
+              if [ "$VULN_COUNT" -gt 5 ]; then
+                printf "### ⚡ Priority Level: **CRITICAL**\n" >> consolidated_comment.md
+              else
+                printf "### ⚡ Priority Level: **HIGH**\n" >> consolidated_comment.md
+              fi
+              printf "Please prioritize this security scan and provide actionable fix recommendations.\n\n" >> consolidated_comment.md
+              printf "**Scan Context:**\n" >> consolidated_comment.md
+              printf "- Repository: %s\n" "${{ github.repository }}" >> consolidated_comment.md
+              printf "- Scan Date: %s\n" "$(date)" >> consolidated_comment.md
+              printf "- Total Vulnerabilities: %s\n" "$VULN_COUNT" >> consolidated_comment.md
+              printf "- Workflow: Automated Security Scan\n\n" >> consolidated_comment.md
+              printf "*This issue was automatically created and assigned by the AI Security Scan workflow*\n" >> consolidated_comment.md
+              
+              # Add the comment
+              if gh issue comment "$CONSOLIDATED_NUMBER" --body-file consolidated_comment.md 2>/dev/null; then
+                echo "✅ Added comprehensive Copilot comment to consolidated issue #$CONSOLIDATED_NUMBER"
+              else
+                echo "⚠️ Failed to add Copilot comment to consolidated issue #$CONSOLIDATED_NUMBER"
+              fi
+              
+            else
+              echo "❌ Failed to create consolidated vulnerability issue"
+            fi
+            
+          else
+            echo "No vulnerabilities found, skipping consolidated report creation"
+          fi
+
+      # Step 8: Upload issue creation artifacts
       - name: Upload issue artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -552,7 +833,7 @@ jobs:
             vulnerability-issues.md
             vulnerability-data/
 
-      # Step 7: Update step summary
+      # Step 9: Update step summary
       - name: Issue creation summary
         if: always()
         run: |
@@ -571,16 +852,25 @@ jobs:
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🤖 AI Assistance Requested" >> $GITHUB_STEP_SUMMARY
+          echo "### 🤖 GitHub Copilot Integration" >> $GITHUB_STEP_SUMMARY
           echo "Each vulnerability issue includes:" >> $GITHUB_STEP_SUMMARY
-          echo "- Specific GitHub Copilot fix requests" >> $GITHUB_STEP_SUMMARY
-          echo "- Detailed vulnerability analysis" >> $GITHUB_STEP_SUMMARY
-          echo "- Upgrade path recommendations" >> $GITHUB_STEP_SUMMARY
-          echo "- Alternative solution suggestions" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Automatic Assignment:** Issues assigned to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
+          echo "- 🎯 **Specific Fix Requests:** Detailed Copilot assistance comments" >> $GITHUB_STEP_SUMMARY
+          echo "- 📋 **Actionable Tasks:** Clear requirements for fix commands" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔍 **Vulnerability Analysis:** Comprehensive security context" >> $GITHUB_STEP_SUMMARY
+          echo "- 🚀 **Priority Classification:** Critical/High priority labeling" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Labels Applied:** \`security\`, \`vulnerability\`, \`ai-fix-requested\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Labels Applied:** \`security\`, \`vulnerability\`, \`ai-fix-requested\`, \`copilot-task\`, \`scheduled\`" >> $GITHUB_STEP_SUMMARY
           echo "**Priority Labels:** \`critical\`, \`high-priority\` (based on severity)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📋 Master Tracking Issue" >> $GITHUB_STEP_SUMMARY
           echo "A comprehensive tracking issue has been created to monitor progress on all vulnerabilities." >> $GITHUB_STEP_SUMMARY
           echo "This issue includes action items, AI assistance summary, and progress tracking." >> $GITHUB_STEP_SUMMARY
+          echo "The tracking issue is also assigned to GitHub Copilot for coordination." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🎯 Consolidated Report" >> $GITHUB_STEP_SUMMARY
+          echo "A consolidated vulnerability report issue has been created with:" >> $GITHUB_STEP_SUMMARY
+          echo "- Complete vulnerability analysis for Copilot review" >> $GITHUB_STEP_SUMMARY
+          echo "- Automatic assignment to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
+          echo "- Comprehensive fix request with specific objectives" >> $GITHUB_STEP_SUMMARY
+          echo "- Expected response format and priority classification" >> $GITHUB_STEP_SUMMARY
