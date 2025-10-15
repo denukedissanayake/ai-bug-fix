@@ -243,21 +243,21 @@ jobs:
           name: vulnerability-data
           path: vulnerability-data/
 
-      # Step 4: Install GitHub CLI and Setup Authentication
-      - name: Install GitHub CLI and Setup Authentication
+      # Step 4: Set up GitHub CLI authentication
+      - name: Set up GitHub CLI authentication
+        run: |
+          echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
         env:
-          # Use the built-in GITHUB_TOKEN which has proper permissions
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+
+      # Step 5: Install GitHub Copilot CLI extension
+      - name: Install GitHub Copilot CLI extension
+        env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # GitHub CLI is pre-installed in ubuntu-latest runners
           echo "Using pre-installed GitHub CLI"
           gh --version
-          
-          # Configure GitHub CLI with proper authentication using built-in token
-          echo "Configuring GitHub CLI authentication..."
-          
-          # GitHub CLI automatically uses GITHUB_TOKEN environment variable
-          echo "Using built-in GITHUB_TOKEN for authentication"
           
           # Verify authentication
           echo "Verifying GitHub CLI authentication..."
@@ -265,8 +265,6 @@ jobs:
             echo "✅ GitHub CLI authenticated successfully"
           else
             echo "❌ GitHub CLI authentication failed"
-            echo "Debugging authentication..."
-            echo "Token length: ${#GITHUB_TOKEN}"
             echo "Auth status output:"
             gh auth status || true
             exit 1
