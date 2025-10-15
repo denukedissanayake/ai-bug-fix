@@ -350,6 +350,10 @@ jobs:
           else
             echo "❌ GitHub Copilot API not accessible" >> copilot-analysis.md
           fi
+
+          echo "API_AVAILABLE value: $API_AVAILABLE"
+
+          echo "COPILOT_AVAILABLE value: $COPILOT_AVAILABLE"
           
           echo "### Vulnerability Analysis Results" >> copilot-analysis.md
           
