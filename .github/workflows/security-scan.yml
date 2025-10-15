@@ -246,11 +246,11 @@ jobs:
       # Step 4: Set up GitHub CLI authentication
       - name: Set up GitHub CLI authentication
         run: |
-          # Clear any existing GITHUB_TOKEN from environment to avoid conflicts
+          # Clear any existing GitHub tokens from environment to avoid conflicts
           unset GITHUB_TOKEN
+          unset GH_TOKEN
+          # Use token directly without environment variable conflicts
           echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
 
       # Step 5: Install GitHub Copilot CLI extension
       - name: Install GitHub Copilot CLI extension
