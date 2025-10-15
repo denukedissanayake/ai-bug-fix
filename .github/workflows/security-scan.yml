@@ -95,7 +95,8 @@ jobs:
           jq -r 'keys' full-scan-results.json 2>/dev/null || echo "Invalid JSON in scan results"
           
           # Extract high and critical vulnerabilities with detailed context
-          jq -r '.vulnerabilities[]? // [] | select(.severity == "high" or .severity == "critical") | {
+          echo "Extracting vulnerabilities..."
+          jq -c '.vulnerabilities[]? // [] | select(.severity == "high" or .severity == "critical") | {
             id: (.id // "unknown"),
             title: (.title // "Unknown Vulnerability"),
             severity: (.severity // "unknown"),
@@ -109,10 +110,17 @@ jobs:
             references: (.references // []),
             CVSSv3: (.CVSSv3 // null),
             from: (.from // [])
-          }' full-scan-results.json > detailed-vulnerabilities.json 2>/dev/null || echo "[]" > detailed-vulnerabilities.json
+          }' full-scan-results.json 2>/dev/null | jq -s '.' > detailed-vulnerabilities.json || echo "[]" > detailed-vulnerabilities.json
           
           # Count vulnerabilities
-          VULN_COUNT=$(jq 'length' detailed-vulnerabilities.json 2>/dev/null || echo "0")
+          VULN_COUNT=$(jq 'length' detailed-vulnerabilities.json 2>/dev/null | head -n 1 | tr -d '\n\r' || echo "0")
+          # Debug: show raw count value
+          echo "Raw VULN_COUNT value: '$VULN_COUNT'"
+          # Ensure it's a valid number
+          if ! [[ "$VULN_COUNT" =~ ^[0-9]+$ ]]; then
+            echo "Invalid vulnerability count: '$VULN_COUNT', setting to 0"
+            VULN_COUNT=0
+          fi
           echo "fixable_count=$VULN_COUNT" >> $GITHUB_OUTPUT
           echo "Found $VULN_COUNT high/critical vulnerabilities"
           
@@ -128,7 +136,8 @@ jobs:
           echo "## Detected Vulnerabilities" >> vulnerability-context.md
           echo "" >> vulnerability-context.md
           
-          if [ "$VULN_COUNT" -gt 0 ]; then
+          if [ "$VULN_COUNT" -gt 0 ] 2>/dev/null; then
+            echo "Processing $VULN_COUNT vulnerabilities..."
             jq -r '.[] | "### \(.title // "Unknown Vulnerability") (\(.severity // "unknown" | ascii_upcase))
             
             **Package:** \(.packageName // "unknown")@\(.version // "unknown")
@@ -156,6 +165,7 @@ jobs:
             ---
             "' detailed-vulnerabilities.json >> vulnerability-context.md 2>/dev/null || echo "Error processing vulnerability details" >> vulnerability-context.md
           else
+            echo "No high or critical vulnerabilities detected."
             echo "No high or critical vulnerabilities detected." >> vulnerability-context.md
             echo "" >> vulnerability-context.md
             echo "✅ This project appears to be secure from high and critical vulnerabilities!" >> vulnerability-context.md
