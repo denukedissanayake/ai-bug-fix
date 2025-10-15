@@ -269,14 +269,21 @@ jobs:
           echo "Installing GitHub Copilot CLI extension..."
           gh extension install github/gh-copilot 2>/dev/null || gh extension list | grep -q "gh-copilot"
           
-          # Set up Copilot auth token directly (workaround for headless environment)
-          echo "Setting up Copilot authentication..."
+          # Set up GitHub CLI authentication with proper format
+          echo "Setting up GitHub CLI authentication..."
           mkdir -p ~/.config/gh
-          echo '{"hosts":{"github.com":{"oauth_token":"${{ secrets.GH_TOKEN }}","user":"${{ github.repository_owner }}"}}}' > ~/.config/gh/hosts.yml
+          cat > ~/.config/gh/hosts.yml << EOF
+          github.com:
+            oauth_token: ${{ secrets.GH_TOKEN }}
+            user: ${{ github.repository_owner }}
+            git_protocol: https
+          EOF
           
-          # For Copilot CLI specifically
-          mkdir -p ~/.config/gh/copilot
-          echo '{"token":"${{ secrets.GH_TOKEN }}","user":"${{ github.repository_owner }}"}' > ~/.config/gh/copilot/config.json
+          # Alternative authentication method - use gh auth login with token
+          echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
+          
+          # Verify authentication works
+          gh auth status || echo "Direct auth failed, trying alternative method"
           
           # Test Copilot CLI functionality
           if gh copilot --help >/dev/null 2>&1; then
