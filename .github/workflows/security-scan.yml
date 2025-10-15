@@ -513,7 +513,6 @@ jobs:
           echo "**Vulnerabilities Found:** $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
           echo "**Issue Creation Date:** $(date)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
           echo "### 🤖 GitHub Copilot Integration" >> $GITHUB_STEP_SUMMARY
           echo "The security vulnerability issue includes:" >> $GITHUB_STEP_SUMMARY
           echo "- ✅ **Automatic Assignment:** Issue assigned to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
