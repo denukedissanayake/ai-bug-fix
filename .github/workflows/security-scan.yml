@@ -235,6 +235,8 @@ jobs:
 
       # Step 4: Install GitHub CLI and Copilot CLI
       - name: Install GitHub CLI and GitHub Copilot CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Install GitHub CLI
           type -p curl >/dev/null || (sudo apt update && sudo apt install curl -y)
@@ -244,7 +246,11 @@ jobs:
           && sudo apt update \
           && sudo apt install gh -y
           
-          # Try to install GitHub Copilot CLI extension (may not be available in Actions)
+          # Authenticate GitHub CLI
+          echo "Authenticating GitHub CLI..."
+          echo "$GH_TOKEN" | gh auth login --with-token
+          
+          # Try to install GitHub Copilot CLI extension
           echo "Attempting to install GitHub Copilot CLI extension..."
           gh extension install github/gh-copilot || echo "⚠️  GitHub Copilot CLI extension not available - will use manual analysis"
           
@@ -259,6 +265,7 @@ jobs:
       - name: Generate fixes with GitHub Copilot
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "🤖 Using GitHub Copilot to analyze and fix vulnerabilities..."
           
@@ -375,6 +382,7 @@ jobs:
         if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Configure git
           git config --local user.email "action@github.com"
