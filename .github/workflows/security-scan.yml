@@ -251,6 +251,7 @@ jobs:
           unset GH_TOKEN
           # Use token directly without environment variable conflicts
           echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
+          gh auth status
 
       # Step 5: Install GitHub Copilot CLI extension
       - name: Install GitHub Copilot CLI extension
