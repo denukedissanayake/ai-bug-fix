@@ -64,16 +64,20 @@ jobs:
           [ ! -f "dependency-scan-results.json" ] && echo '{"vulnerabilities": []}' > dependency-scan-results.json
           [ ! -f "code-scan-results.json" ] && echo '{"vulnerabilities": []}' > code-scan-results.json
           
-          # Merge the results
-          jq -s '{
-            vulnerabilities: (.[0].vulnerabilities // []) + (.[1].vulnerabilities // []),
+          # Merge the results using a simpler approach
+          cat > merge-script.jq << 'EOF'
+          {
+            vulnerabilities: ((.[0].vulnerabilities // []) + (.[1].vulnerabilities // [])),
             dependenciesWithIssues: (.[0].dependenciesWithIssues // []),
             summary: {
-              total: ((.[0].vulnerabilities // []) + (.[1].vulnerabilities // [])) | length,
-              dependency_issues: (.[0].vulnerabilities // []) | length,
-              code_issues: (.[1].vulnerabilities // []) | length
+              total: (((.[0].vulnerabilities // []) + (.[1].vulnerabilities // [])) | length),
+              dependency_issues: ((.[0].vulnerabilities // []) | length),
+              code_issues: ((.[1].vulnerabilities // []) | length)
             }
-          }' dependency-scan-results.json code-scan-results.json > full-scan-results.json || echo '{"vulnerabilities": []}' > full-scan-results.json
+          }
+          EOF
+          
+          jq -s -f merge-script.jq dependency-scan-results.json code-scan-results.json > full-scan-results.json || echo '{"vulnerabilities": []}' > full-scan-results.json
           
           echo "INFO: Scan results merged successfully"
 
