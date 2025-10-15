@@ -212,477 +212,305 @@ jobs:
             echo "vulnerability-context.md not found"
           fi
 
-  github-copilot-fix:
+  create-vulnerability-issues:
     runs-on: ubuntu-latest
     needs: vulnerability-detection
     if: needs.vulnerability-detection.outputs.has-vulnerabilities == 'true'
     
-    outputs:
-      package_updated: ${{ steps.apply_copilot_fixes.outputs.package_updated }}
-    
     permissions:
-      contents: write
+      contents: read
+      issues: write
       pull-requests: write
-      actions: read
     
     steps:
       # Step 1: Checkout the repository code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Set up Node.js
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      # Step 3: Download vulnerability data
+      # Step 2: Download vulnerability data
       - name: Download vulnerability data
         uses: actions/download-artifact@v4
         with:
           name: vulnerability-data
           path: vulnerability-data/
 
-      # Step 4: Set up GitHub CLI authentication
+      # Step 3: Set up GitHub CLI authentication
       - name: Set up GitHub CLI authentication
         run: |
-          # Clear any existing GitHub tokens from environment to avoid conflicts
-          unset GITHUB_TOKEN
-          # Use token directly without environment variable conflicts
           echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
           gh auth status
 
-      # Step 5: Install GitHub Copilot CLI extension
-      - name: Install GitHub Copilot CLI extension
-        run: |
-          # GitHub CLI is pre-installed in ubuntu-latest runners
-          echo "Using pre-installed GitHub CLI"
-          gh --version
-          
-          # Authenticate GitHub CLI first
-          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
-          
-          # Verify basic GitHub CLI authentication
-          if gh auth status; then
-            echo "✅ GitHub CLI authenticated successfully"
-          else
-            echo "❌ GitHub CLI authentication failed"
-            exit 1
-          fi
-          
-          # Try to install GitHub Copilot CLI extension
-          echo "Installing GitHub Copilot CLI extension..."
-          if gh extension install github/gh-copilot 2>/dev/null; then
-            echo "✅ GitHub Copilot CLI extension installed"
-          elif gh extension list | grep -q "gh-copilot"; then
-            echo "✅ GitHub Copilot CLI extension already exists"
-          else
-            echo "⚠️ GitHub Copilot CLI extension installation failed"
-          fi
-          
-          # Important: GitHub Copilot CLI requires separate authentication
-          # In GitHub Actions, we cannot perform interactive OAuth flow
-          # So we'll implement a robust fallback strategy
-          echo "Note: GitHub Copilot CLI requires interactive authentication which is not available in GitHub Actions"
-          echo "The workflow will use intelligent rule-based analysis as the primary method"
-          
-          # Test Copilot CLI functionality
-          if gh copilot --help >/dev/null 2>&1; then
-            echo "✅ GitHub Copilot CLI is working"
-          else
-            echo "⚠️ GitHub Copilot CLI installed but not functional"
-          fi
-          
-          # Debug information
-          echo "=== GitHub CLI Debug Information ==="
-          echo "GitHub CLI version: $(gh --version)"
-          echo "Authentication status:"
-          gh auth status 2>/dev/null || echo "Auth status check failed"
-          echo "Available extensions:"
-          gh extension list 2>/dev/null || echo "No extensions or list failed"
-          echo "===================================="
-
-      # Step 5: Analyze vulnerabilities with GitHub Copilot
-      - name: Generate fixes with GitHub Copilot
+      # Step 4: Create GitHub issues for each vulnerability
+      - name: Create GitHub issues for vulnerabilities
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "🤖 Using GitHub Copilot to analyze and fix vulnerabilities..."
-
-          # gh auth login --with-token < <(echo $GITHUB_TOKEN)
-          
-          # Create prompts for GitHub Copilot based on vulnerabilities
-          cat > copilot-prompts.txt << 'EOF'
-          Based on the security vulnerability report in vulnerability-data/vulnerability-context.md, please provide specific fixes for the Node.js/npm project vulnerabilities:
-
-          1. Analyze each vulnerability and determine the best fix approach
-          2. Generate specific npm commands to update vulnerable packages
-          3. Identify any potential breaking changes or compatibility issues
-          4. Suggest alternative packages if direct updates aren't available
-          5. Provide code-level fixes if the vulnerabilities are in application code
-          
-          Focus on:
-          - High and critical severity vulnerabilities
-          - Dependency updates that maintain compatibility
-          - Security best practices for Node.js applications
-          - Minimal disruption to existing functionality
-          EOF
-          
-          # Check if GitHub Copilot CLI is available and try to use it
-          echo "## 🤖 AI-Powered Security Analysis" > copilot-analysis.md
-          echo "" >> copilot-analysis.md
-          echo "### Analysis Method Detection" >> copilot-analysis.md
-          
-          # Test Copilot CLI availability - but expect it to fail in GitHub Actions
-          COPILOT_AVAILABLE=false
-          API_AVAILABLE=false
-          
-          echo "🤖 Using GitHub Copilot to analyze and fix vulnerabilities..."
-          
-          # Test if Copilot CLI extension exists (but authentication will likely fail)
-          if gh extension list | grep -q "gh-copilot"; then
-            echo "GitHub Copilot CLI extension found"
-            # Try to test Copilot CLI - this will likely fail due to OAuth requirements
-            if timeout 10 gh copilot --help >/dev/null 2>&1; then
-              echo "✅ GitHub Copilot CLI is working (unexpected in GitHub Actions!)"
-              COPILOT_AVAILABLE=true
-            else
-              echo "❌ GitHub Copilot CLI requires interactive OAuth (expected in GitHub Actions)"
-              echo "Falling back to intelligent rule-based analysis"
-            fi
-          else
-            echo "GitHub Copilot CLI extension not available"
-          fi
-          
-          # Always show the detected values for debugging
-          echo "API_AVAILABLE value: $API_AVAILABLE"
-          echo "COPILOT_AVAILABLE value: $COPILOT_AVAILABLE"
-          
-          # Since Copilot CLI won't work in GitHub Actions, use intelligent analysis
-          echo "Using GitHub Copilot CLI for analysis..."
-          
-          echo "### Vulnerability Analysis Results" >> copilot-analysis.md
-          
-          if [ "$COPILOT_AVAILABLE" = "true" ]; then
-            echo "🤖 Using actual GitHub Copilot CLI for analysis..."
-            echo "**Analysis Method:** GitHub Copilot CLI (AI-Powered)" >> copilot-analysis.md
-            echo "" >> copilot-analysis.md
-            
-            # Create a detailed prompt for Copilot with vulnerability context
-            VULN_COUNT=$(jq -r 'length' vulnerability-data/detailed-vulnerabilities.json 2>/dev/null || echo "0")
-            
-            # Read vulnerability context for Copilot prompt
-            VULN_CONTEXT=""
-            if [ -f "vulnerability-data/vulnerability-context.md" ]; then
-              VULN_CONTEXT=$(head -n 50 vulnerability-data/vulnerability-context.md | tr '\n' ' ')
-            fi
-            
-            # Create comprehensive prompt for Copilot
-            PROMPT="Based on this security scan showing $VULN_COUNT vulnerabilities: $VULN_CONTEXT. Generate npm commands to: 1. Update vulnerable packages to secure versions 2. Fix high/critical severity issues first 3. Maintain compatibility where possible 4. Provide alternative solutions for unfixable packages. Focus on actionable npm/yarn commands and code changes."
-            
-            echo "🤖 Generating AI-powered fixes with GitHub Copilot..." >> copilot-analysis.md
-            echo "Prompt: Fix $VULN_COUNT security vulnerabilities found in dependency scan" >> copilot-analysis.md
-            echo "" >> copilot-analysis.md
-            
-            # Try using Copilot CLI with the vulnerability context
-            if timeout 120 gh copilot suggest "$PROMPT" --target shell > copilot-suggestions.txt 2>&1; then
-              echo "✅ GitHub Copilot CLI analysis successful" >> copilot-analysis.md
-              echo "## 🤖 AI-Generated Fix Suggestions:" >> copilot-analysis.md
-              echo '```bash' >> copilot-analysis.md
-              cat copilot-suggestions.txt >> copilot-analysis.md
-              echo '```' >> copilot-analysis.md
-              
-              # Also try code-specific suggestions if there are code vulnerabilities
-              if timeout 60 gh copilot suggest "Review this package.json for security improvements and suggest safer alternatives" --target shell > copilot-code-suggestions.txt 2>&1; then
-                echo "" >> copilot-analysis.md
-                echo "## 🔒 Additional Security Recommendations:" >> copilot-analysis.md
-                echo '```bash' >> copilot-analysis.md
-                cat copilot-code-suggestions.txt >> copilot-analysis.md
-                echo '```' >> copilot-analysis.md
-              fi
-              
-              COPILOT_SUCCESS=true
-              
-            else
-              echo "❌ Copilot CLI analysis failed, falling back to test mode" >> copilot-analysis.md
-              echo "Error output:" >> copilot-analysis.md
-              echo '```' >> copilot-analysis.md
-              cat copilot-suggestions.txt 2>/dev/null || echo "No error output captured" >> copilot-analysis.md
-              echo '```' >> copilot-analysis.md
-              
-              COPILOT_SUCCESS=false
-            fi
-            
-          else
-            echo "🧠 GitHub Copilot CLI not available, using test mode..."
-            echo "**Analysis Method:** Test Mode (README Update)" >> copilot-analysis.md
-            echo "" >> copilot-analysis.md
-            echo "*Note: GitHub Copilot CLI not available - running in test mode with README update.*" >> copilot-analysis.md
-            echo "" >> copilot-analysis.md
-            
-            COPILOT_SUCCESS=false
-          fi
-          
-          # If Copilot failed or not available, create test suggestions
-          if [ "$COPILOT_SUCCESS" != "true" ]; then
-            echo "🧪 Creating test mode analysis..."
-            echo "# Test Mode - README Update Instead of NPM Fixes" > copilot-suggestions.txt
-            echo "## Test Mode Analysis" >> copilot-suggestions.txt
-            echo "This is a test run focusing on README update instead of npm vulnerability fixes." >> copilot-suggestions.txt
-            echo "" >> copilot-suggestions.txt
-            echo "### What will be updated:" >> copilot-suggestions.txt
-            echo "- README.md file with security scan information" >> copilot-suggestions.txt
-            echo "- Test commit and branch creation" >> copilot-suggestions.txt
-            echo "- Pull request creation logic testing" >> copilot-suggestions.txt
-            echo "" >> copilot-suggestions.txt
-            echo "### Test objectives:" >> copilot-suggestions.txt
-            echo "- Verify workflow can detect vulnerabilities" >> copilot-suggestions.txt
-            echo "- Test branch and commit creation" >> copilot-suggestions.txt
-            echo "- Validate PR creation process" >> copilot-suggestions.txt
-            echo "- Skip actual npm dependency updates" >> copilot-suggestions.txt
-            
-            echo "✅ Test mode analysis completed" >> copilot-analysis.md
-            echo "## Test Mode Recommendations:" >> copilot-analysis.md
-            echo '```bash' >> copilot-analysis.md
-            cat copilot-suggestions.txt >> copilot-analysis.md
-            echo '```' >> copilot-analysis.md
-          fi
-          
-          # Continue with the rest of the analysis - skip npm fixes generation since not needed
-          echo "## Next Steps" >> copilot-analysis.md
-          echo "Analysis complete. Proceeding with test mode (README update) instead of npm fixes." >> copilot-analysis.md
-
-      # Step 6: Apply test changes (README update instead of npm fixes)
-      - name: Apply test changes for PR logic
-        id: apply_copilot_fixes
-        run: |
-          echo "🔧 Testing PR creation logic with README update..."
-          
-          # Skip npm-based fixes and just update README for testing
-          echo "Skipping npm-based vulnerability fixes as requested"
-          
-          # Update README.md with security scan information
-          if [ -f README.md ]; then
-            cp README.md README.md.backup
-            
-            # Add security scan information to README
-            echo "" >> README.md
-            echo "## 🔒 Security Status" >> README.md
-            echo "" >> README.md
-            echo "Last security scan: $(date)" >> README.md
-            echo "Vulnerabilities detected: ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }}" >> README.md
-            echo "" >> README.md
-            echo "This project uses automated security scanning to detect and address vulnerabilities." >> README.md
-            echo "Security fixes are managed through AI-assisted analysis and pull requests." >> README.md
-            echo "" >> README.md
-            echo "> **Note**: This section was added by automated security workflow for testing PR logic." >> README.md
-            
-            echo "package_updated=true" >> $GITHUB_OUTPUT
-            echo "✅ README.md was updated for testing PR logic"
-          else
-            echo "package_updated=false" >> $GITHUB_OUTPUT
-            echo "ℹ️  No README.md found to update"
-          fi
-          
-          # Generate a summary of changes
-          echo "## Applied Test Changes" > applied-fixes.md
-          echo "" >> applied-fixes.md
-          echo "### README Changes (for testing PR logic)" >> applied-fixes.md
-          if [ -f README.md.backup ]; then
-            echo "\`\`\`diff" >> applied-fixes.md
-            diff README.md.backup README.md >> applied-fixes.md || true
-            echo "\`\`\`" >> applied-fixes.md
-          fi
-
-      # Step 7: Validate test changes (skip npm validation)
-      - name: Validate test changes
-        if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
-        run: |
-          echo "🧪 Validating README update for PR testing..."
-          
-          # Skip npm-related validation
-          echo "Skipping npm install, test, and build validation as requested"
-          echo "This is a test run focusing only on PR creation logic"
-          
-          # Just verify the README was updated correctly
-          if [ -f README.md ] && grep -q "Security Status" README.md; then
-            echo "✅ README.md update successful"
-          else
-            echo "❌ README.md update failed"
-          fi
-          
-          echo "Test validation complete - focusing on PR creation workflow"
-
-      # Step 8: Upload comprehensive artifacts
-      - name: Upload fix artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ai-security-fixes
-          path: |
-            copilot-fixes.sh
-            copilot-analysis.md
-            copilot-suggestions.txt
-            applied-fixes.md
-            package.json.backup
-            vulnerability-data/
-
-      # Step 10: Update job summary (without PR creation)
-      - name: Create security fix branch and commit
-        id: create_branch
-        if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Create unique branch name
-          BRANCH_NAME="ai-security-fix-$(date +%Y%m%d-%H%M%S)"
-          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_OUTPUT
-          
-          # Configure git
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Actions (AI Security Fixes)"
-          
-          # Create and switch to new branch
-          git checkout -b $BRANCH_NAME
-          
-          # Add all changed files
-          git add README.md applied-fixes.md copilot-analysis.md || true
-          
-          # Create comprehensive commit message
-          COMMIT_MSG="🤖� AI-Workflow Test: README update for PR logic testing
-
-          Testing automated PR creation workflow with README update instead of npm fixes.
-          
-          This commit tests the AI workflow's ability to:
-          - Detect vulnerabilities (${{ needs.vulnerability-detection.outputs.vulnerabilities-found }} found)
-          - Create branches and commits
-          - Generate pull requests
-          
-          Analysis method: Rule-based Analysis (npm fixes skipped)
-          Test date: $(date)
-          
-          Co-authored-by: GitHub Actions <actions@github.com>"
-          
-          git commit -m "$COMMIT_MSG"
-          
-          # Push the branch
-          git push origin $BRANCH_NAME
+          echo "🐛 Creating GitHub issues for discovered vulnerabilities..."
           
           # Create labels if they don't exist
           echo "Creating repository labels..."
-          gh label create "testing" --description "Testing and validation changes" --color "f9c513" --force || echo "Testing label exists"
-          gh label create "ai-workflow" --description "AI workflow testing and development" --color "0052cc" --force || echo "AI-workflow label exists"
-          gh label create "automated" --description "Automated changes applied" --color "1d76db" --force || echo "Automated label exists"
+          gh label create "security" --description "Security vulnerability" --color "d73a4a" --force || echo "Security label exists"
+          gh label create "vulnerability" --description "Security vulnerability found by scan" --color "b60205" --force || echo "Vulnerability label exists"
+          gh label create "high-priority" --description "High priority issue" --color "ff6b6b" --force || echo "High-priority label exists"
+          gh label create "critical" --description "Critical severity issue" --color "d10000" --force || echo "Critical label exists"
+          gh label create "ai-fix-requested" --description "AI assistance requested for fix" --color "0052cc" --force || echo "AI-fix-requested label exists"
           
-          # Generate PR URL for manual creation and try automatic creation
-          PR_URL="https://github.com/${{ github.repository }}/compare/main...$BRANCH_NAME?quick_pull=1"
-          echo "PR_URL=$PR_URL" >> $GITHUB_OUTPUT
-          
-          # Try to create PR using GitHub CLI (with fallback to manual)
-          echo "Attempting to create pull request..."
-          
-          PR_TITLE="🤖� AI-Workflow Test: README update for PR logic testing ($(date +%Y-%m-%d))"
-          
-          # Try creating PR with GitHub CLI using simple body
-          if gh pr create \
-            --title "$PR_TITLE" \
-            --body "🤖📝 AI-Workflow Testing - Testing automated PR creation logic with README update instead of npm fixes. This validates the workflow's ability to detect vulnerabilities and create PRs without applying actual dependency fixes." \
-            --head "$BRANCH_NAME" \
-            --base "main" \
-            --label "testing" \
-            --label "ai-workflow" \
-            --label "automated" 2>/dev/null; then
-            echo "✅ Pull request created successfully via GitHub CLI"
-            PR_CREATED="true"
-          else
-            echo "⚠️ GitHub CLI PR creation failed - manual creation required"
-            echo "This is expected due to GitHub Actions security restrictions"
-            PR_CREATED="false"
+          # Check if vulnerabilities file exists and has content
+          if [ ! -f "vulnerability-data/detailed-vulnerabilities.json" ]; then
+            echo "❌ No vulnerability data file found"
+            exit 1
           fi
           
-          echo "PR_CREATED=$PR_CREATED" >> $GITHUB_OUTPUT
+          # Count vulnerabilities
+          VULN_COUNT=$(jq 'length' vulnerability-data/detailed-vulnerabilities.json 2>/dev/null || echo "0")
+          echo "Found $VULN_COUNT vulnerabilities to process"
           
-          echo "Branch created successfully: $BRANCH_NAME"
-          if [ "$PR_CREATED" = "true" ]; then
-            echo "Pull request created automatically"
+          if [ "$VULN_COUNT" -eq 0 ]; then
+            echo "No vulnerabilities to create issues for"
+            exit 0
+          fi
+          
+          # Create a tracking file for issue numbers
+          echo "# Vulnerability Issues Created" > vulnerability-issues.md
+          echo "" >> vulnerability-issues.md
+          echo "Created on: $(date)" >> vulnerability-issues.md
+          echo "Total vulnerabilities: $VULN_COUNT" >> vulnerability-issues.md
+          echo "" >> vulnerability-issues.md
+          
+          # Process each vulnerability and create an issue
+          jq -c '.[]' vulnerability-data/detailed-vulnerabilities.json | while IFS= read -r vuln; do
+            # Extract vulnerability details
+            VULN_ID=$(echo "$vuln" | jq -r '.id // "unknown"')
+            VULN_TITLE=$(echo "$vuln" | jq -r '.title // "Unknown Vulnerability"')
+            SEVERITY=$(echo "$vuln" | jq -r '.severity // "unknown"' | tr '[:lower:]' '[:upper:]')
+            PACKAGE_NAME=$(echo "$vuln" | jq -r '.packageName // "unknown"')
+            VERSION=$(echo "$vuln" | jq -r '.version // "unknown"')
+            FIXED_VERSION=$(echo "$vuln" | jq -r '.nearestFixedInVersion // "No direct fix available"')
+            DESCRIPTION=$(echo "$vuln" | jq -r '.description // "No description available"')
+            IS_UPGRADABLE=$(echo "$vuln" | jq -r '.isUpgradable // false')
+            IS_PATCHABLE=$(echo "$vuln" | jq -r '.isPatchable // false')
+            CVSS_SCORE=$(echo "$vuln" | jq -r '.CVSSv3 // "N/A"')
+            REFERENCES=$(echo "$vuln" | jq -r '.references[]? // "No references available"' | head -3 | paste -sd '\n')
+            DEPENDENCY_PATH=$(echo "$vuln" | jq -r 'if .from then (.from | if type == "array" then join(" → ") else tostring end) else "Direct dependency" end')
+            
+            # Create issue title
+            ISSUE_TITLE="🔐 [$SEVERITY] $VULN_TITLE in $PACKAGE_NAME@$VERSION"
+            
+            # Create issue body using printf to avoid YAML issues
+            printf "## 🚨 Security Vulnerability Detected\n\n" > issue_body.md
+            printf "**Vulnerability ID:** %s\n" "$VULN_ID" >> issue_body.md
+            printf "**Severity:** %s\n" "$SEVERITY" >> issue_body.md
+            printf "**CVSS Score:** %s\n" "$CVSS_SCORE" >> issue_body.md
+            printf "**Package:** \`%s@%s\`\n" "$PACKAGE_NAME" "$VERSION" >> issue_body.md
+            printf "**Fixed in Version:** \`%s\`\n" "$FIXED_VERSION" >> issue_body.md
+            printf "**Dependency Path:** %s\n\n" "$DEPENDENCY_PATH" >> issue_body.md
+            printf "### 📝 Description\n%s\n\n" "$DESCRIPTION" >> issue_body.md
+            printf "### 🔧 Fix Information\n" >> issue_body.md
+            printf "- **Upgradable:** %s\n" "$IS_UPGRADABLE" >> issue_body.md
+            printf "- **Patchable:** %s\n" "$IS_PATCHABLE" >> issue_body.md
+            if [ "$FIXED_VERSION" != "No direct fix available" ]; then
+              printf "- **Recommended Fix:** Update to version %s\n\n" "$FIXED_VERSION" >> issue_body.md
+            else
+              printf "- **Recommended Fix:** Review alternatives or apply manual patches\n\n" >> issue_body.md
+            fi
+            printf "### 📚 References\n%s\n\n" "$REFERENCES" >> issue_body.md
+            printf "### 🤖 AI Fix Request\n" >> issue_body.md
+            printf "Github-copilot, please help fix this %s severity vulnerability in %s.\n\n" "$SEVERITY" "$PACKAGE_NAME" >> issue_body.md
+            printf "**Specific requests:**\n" >> issue_body.md
+            printf "1. Analyze the vulnerability and its impact on our codebase\n" >> issue_body.md
+            printf "2. Suggest the safest way to update from \`%s\` to a secure version\n" "$VERSION" >> issue_body.md
+            printf "3. Check for any breaking changes in the upgrade path\n" >> issue_body.md
+            printf "4. Provide specific npm/yarn commands to apply the fix\n" >> issue_body.md
+            printf "5. Suggest alternative packages if direct update isn't possible\n" >> issue_body.md
+            printf "6. Review our usage of this package for any security best practices\n\n" >> issue_body.md
+            printf "**Priority:** This is a %s severity issue that should be addressed promptly.\n\n" "$SEVERITY" >> issue_body.md
+            printf "*This issue was automatically created by the AI Security Scan workflow on %s*\n" "$(date)" >> issue_body.md
+            printf "*Scan run: %s*\n" "${{ github.run_id }}" >> issue_body.md
+            
+            # Determine labels based on severity
+            LABELS="security,vulnerability,ai-fix-requested"
+            case "$SEVERITY" in
+              "CRITICAL")
+                LABELS="$LABELS,critical,high-priority"
+                ;;
+              "HIGH")
+                LABELS="$LABELS,high-priority"
+                ;;
+            esac
+            
+            echo "Creating issue for: $VULN_TITLE ($SEVERITY)"
+            
+            # Create the GitHub issue
+            if ISSUE_URL=$(gh issue create \
+              --title "$ISSUE_TITLE" \
+              --body-file issue_body.md \
+              --label "$LABELS" \
+              2>/dev/null); then
+              
+              echo "✅ Created issue: $ISSUE_URL"
+              
+              # Extract issue number from URL
+              ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
+              
+              # Add to tracking file
+              echo "- [$SEVERITY] Issue #$ISSUE_NUMBER: $VULN_TITLE ($PACKAGE_NAME@$VERSION)" >> vulnerability-issues.md
+              echo "  - URL: $ISSUE_URL" >> vulnerability-issues.md
+              echo "  - CVE: $VULN_ID" >> vulnerability-issues.md
+              echo "" >> vulnerability-issues.md
+              
+              # Create comment body for Copilot assistance using printf
+              printf "## 🤖 GitHub Copilot Fix Request\n\n" > copilot_comment.md
+              printf "Github-copilot, this %s severity vulnerability needs immediate attention:\n\n" "$SEVERITY" >> copilot_comment.md
+              printf "**Package:** \`%s@%s\`\n" "$PACKAGE_NAME" "$VERSION" >> copilot_comment.md
+              printf "**CVE:** %s\n" "$VULN_ID" >> copilot_comment.md
+              if [ "$IS_UPGRADABLE" = "true" ]; then
+                printf "**Current Status:** Upgradable to %s\n\n" "$FIXED_VERSION" >> copilot_comment.md
+              else
+                printf "**Current Status:** No direct upgrade path available\n\n" >> copilot_comment.md
+              fi
+              printf "**Please provide:**\n" >> copilot_comment.md
+              printf "1. **Update command:** Specific npm/yarn command to fix this vulnerability\n" >> copilot_comment.md
+              printf "2. **Compatibility check:** Will this update break existing functionality?\n" >> copilot_comment.md
+              printf "3. **Alternative solutions:** If direct update isn't safe, what are the alternatives?\n" >> copilot_comment.md
+              printf "4. **Code changes:** Any additional code changes needed after the update?\n" >> copilot_comment.md
+              printf "5. **Testing recommendations:** How should we verify the fix doesn't break anything?\n\n" >> copilot_comment.md
+              printf "**Example response format requested:**\n" >> copilot_comment.md
+              printf "\`\`\`bash\n" >> copilot_comment.md
+              printf "# Fix command\n" >> copilot_comment.md
+              printf "npm update %s\n\n" "$PACKAGE_NAME" >> copilot_comment.md
+              printf "# Or if specific version needed\n" >> copilot_comment.md
+              printf "npm install %s@%s\n" "$PACKAGE_NAME" "$FIXED_VERSION" >> copilot_comment.md
+              printf "\`\`\`\n\n" >> copilot_comment.md
+              printf "**Urgency:** %s - Please prioritize this issue.\n\n" "$SEVERITY" >> copilot_comment.md
+              printf "*Automated Copilot assistance request from security scan workflow*\n" >> copilot_comment.md
+              
+              # Add the Copilot assistance comment
+              if gh issue comment "$ISSUE_NUMBER" --body-file copilot_comment.md 2>/dev/null; then
+                echo "✅ Added Copilot assistance comment to issue #$ISSUE_NUMBER"
+              else
+                echo "⚠️ Failed to add Copilot comment to issue #$ISSUE_NUMBER"
+              fi
+              
+            else
+              echo "❌ Failed to create issue for: $VULN_TITLE"
+              echo "- [$SEVERITY] FAILED: $VULN_TITLE ($PACKAGE_NAME@$VERSION)" >> vulnerability-issues.md
+            fi
+            
+            # Add a small delay to avoid rate limiting
+            sleep 2
+          done
+          
+          echo "Finished creating vulnerability issues"
+
+      # Step 5: Create master tracking issue
+      - name: Create master tracking issue
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "📋 Creating master tracking issue..."
+          
+          VULN_COUNT=$(jq 'length' vulnerability-data/detailed-vulnerabilities.json 2>/dev/null || echo "0")
+          
+          # Create comprehensive tracking issue
+          TRACKING_TITLE="🔐 Security Vulnerability Tracking - $(date +%Y-%m-%d) ($VULN_COUNT issues)"
+          
+          # Create tracking issue body using printf
+          printf "## 🚨 Security Vulnerability Dashboard\n\n" > tracking_body.md
+          printf "**Scan Date:** %s\n" "$(date)" >> tracking_body.md
+          printf "**Total Vulnerabilities Found:** %s\n" "$VULN_COUNT" >> tracking_body.md
+          printf "**Workflow Run:** [%s](%s/%s/actions/runs/%s)\n\n" "${{ github.run_id }}" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" >> tracking_body.md
+          
+          printf "### 📊 Vulnerability Summary\n" >> tracking_body.md
+          if [ -f vulnerability-issues.md ]; then
+            cat vulnerability-issues.md | tail -n +5 >> tracking_body.md || printf "No vulnerability details available\n" >> tracking_body.md
           else
-            echo "Manual PR creation required - link provided below"
-            echo "PR URL: $PR_URL"
+            printf "No vulnerability details available\n" >> tracking_body.md
+          fi
+          printf "\n" >> tracking_body.md
+          
+          printf "### 🎯 Action Items\n" >> tracking_body.md
+          printf "- [ ] Review all created vulnerability issues\n" >> tracking_body.md
+          printf "- [ ] Prioritize critical and high severity vulnerabilities\n" >> tracking_body.md
+          printf "- [ ] Apply fixes suggested by GitHub Copilot\n" >> tracking_body.md
+          printf "- [ ] Test fixes in development environment\n" >> tracking_body.md
+          printf "- [ ] Deploy fixes to production\n" >> tracking_body.md
+          printf "- [ ] Close resolved vulnerability issues\n\n" >> tracking_body.md
+          
+          printf "### 🤖 AI Assistance\n" >> tracking_body.md
+          printf "All individual vulnerability issues have been tagged with \`ai-fix-requested\` and include specific requests for GitHub Copilot assistance. Each issue contains:\n" >> tracking_body.md
+          printf "- Detailed vulnerability analysis\n" >> tracking_body.md
+          printf "- Copilot fix requests with specific questions\n" >> tracking_body.md
+          printf "- Upgrade path recommendations\n" >> tracking_body.md
+          printf "- Alternative solution suggestions\n\n" >> tracking_body.md
+          
+          printf "### 📈 Progress Tracking\n" >> tracking_body.md
+          printf "Use this issue to track the overall progress of fixing the %s vulnerabilities detected in this scan.\n\n" "$VULN_COUNT" >> tracking_body.md
+          
+          printf "**Next Steps:**\n" >> tracking_body.md
+          printf "1. Review individual vulnerability issues created by this workflow\n" >> tracking_body.md
+          printf "2. Follow Copilot suggestions for each vulnerability\n" >> tracking_body.md
+          printf "3. Test and apply fixes systematically\n" >> tracking_body.md
+          printf "4. Update this tracking issue with progress\n\n" >> tracking_body.md
+          
+          printf "*This tracking issue was automatically created by the AI Security Scan workflow*\n" >> tracking_body.md
+          printf "*For detailed vulnerability information, check the individual issues linked above*\n" >> tracking_body.md
+          
+          # Create the tracking issue
+          if TRACKING_URL=$(gh issue create \
+            --title "$TRACKING_TITLE" \
+            --body-file tracking_body.md \
+            --label "security,vulnerability,tracking,ai-fix-requested" \
+            2>/dev/null); then
+            
+            echo "✅ Created tracking issue: $TRACKING_URL"
+            TRACKING_NUMBER=$(echo "$TRACKING_URL" | grep -o '[0-9]*$')
+            
+            # Pin the tracking issue if possible
+            gh issue pin "$TRACKING_NUMBER" 2>/dev/null || echo "⚠️ Could not pin tracking issue (may not have permissions)"
+            
+          else
+            echo "❌ Failed to create tracking issue"
           fi
 
-      # Step 7: PR Creation Summary
-      - name: AI-Workflow Test Summary
+      # Step 6: Upload issue creation artifacts
+      - name: Upload issue artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: vulnerability-issues
+          path: |
+            vulnerability-issues.md
+            vulnerability-data/
+
+      # Step 7: Update step summary
+      - name: Issue creation summary
         if: always()
         run: |
-          echo "## 🤖📝 AI-Workflow Testing Summary" >> $GITHUB_STEP_SUMMARY
+          VULN_COUNT=$(jq 'length' vulnerability-data/detailed-vulnerabilities.json 2>/dev/null || echo "0")
+          
+          echo "## 🐛 GitHub Issues Created" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Test Date:** $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "**Vulnerabilities Detected:** ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Test Mode:** README update (npm fixes skipped)" >> $GITHUB_STEP_SUMMARY
-          
-          # Show detailed analysis method detection
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Analysis Method Detection" >> $GITHUB_STEP_SUMMARY
-          
-          if gh copilot --help >/dev/null 2>&1; then
-            echo "**GitHub Copilot CLI:** ✅ Available" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**GitHub Copilot CLI:** ❌ Not available" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if gh api /user/copilot/billing >/dev/null 2>&1; then
-            echo "**GitHub Copilot API:** ✅ Accessible" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**GitHub Copilot API:** ❌ Not accessible (may need subscription)" >> $GITHUB_STEP_SUMMARY
-          fi
-          
+          echo "**Total Issues Created:** $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "**Issue Creation Date:** $(date)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ "${{ steps.create_branch.outputs.BRANCH_NAME }}" != "" ]; then
-            echo "**🤖 Test Changes Applied:** ✅ Yes (README updated)" >> $GITHUB_STEP_SUMMARY
-            echo "**🌿 Branch Created:** ✅ Yes (${{ steps.create_branch.outputs.BRANCH_NAME }})" >> $GITHUB_STEP_SUMMARY
-            
-            if [ "${{ steps.create_branch.outputs.PR_CREATED }}" = "true" ]; then
-              echo "**� Pull Request:** ✅ Created automatically" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "**📋 Pull Request:** ⚠️ Manual creation required" >> $GITHUB_STEP_SUMMARY
-              echo "**�🔗 Create PR:** [Click here to create PR](${{ steps.create_branch.outputs.PR_URL }})" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "**🤖 Test Changes Applied:** ❌ No changes generated" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**📊 Artifacts:** Check 'ai-security-fixes' for detailed analysis" >> $GITHUB_STEP_SUMMARY
-          
-          # Add explanation about test mode
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🧪 Test Mode Information" >> $GITHUB_STEP_SUMMARY
-          echo "This workflow run is in **test mode** and skips npm-based vulnerability fixes." >> $GITHUB_STEP_SUMMARY
-          echo "Instead, it updates the README.md file to test the PR creation logic." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**What was tested:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Vulnerability detection and analysis" >> $GITHUB_STEP_SUMMARY
-          echo "- Branch creation and commits" >> $GITHUB_STEP_SUMMARY
-          echo "- Pull request creation workflow" >> $GITHUB_STEP_SUMMARY
-          echo "- GitHub CLI integration" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🚀 Next Steps" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.create_branch.outputs.BRANCH_NAME }}" != "" ]; then
-            if [ "${{ steps.create_branch.outputs.PR_CREATED }}" = "true" ]; then
-              echo "1. **Review the test pull request** in the repository" >> $GITHUB_STEP_SUMMARY
-              echo "2. **Verify the README changes** to confirm workflow functionality" >> $GITHUB_STEP_SUMMARY
-              echo "3. **Close or merge the test PR** as appropriate" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "1. **[Create Test Pull Request](${{ steps.create_branch.outputs.PR_URL }})** to complete the workflow test" >> $GITHUB_STEP_SUMMARY
-              echo "2. **Review the changes** in the generated branch: \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
-              echo "3. **Verify the README update** confirms the workflow is working" >> $GITHUB_STEP_SUMMARY
-              echo "4. **Close the test PR** after verification" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "**Manual PR Creation Link:** ${{ steps.create_branch.outputs.PR_URL }}" >> $GITHUB_STEP_SUMMARY
-            fi
+          if [ -f vulnerability-issues.md ]; then
+            echo "### 📋 Created Issues" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Test branch:** \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No test changes were applied. Check the workflow logs for issues." >> $GITHUB_STEP_SUMMARY
+            cat vulnerability-issues.md | tail -n +5 >> $GITHUB_STEP_SUMMARY || echo "No issue details available" >> $GITHUB_STEP_SUMMARY
           fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🤖 AI Assistance Requested" >> $GITHUB_STEP_SUMMARY
+          echo "Each vulnerability issue includes:" >> $GITHUB_STEP_SUMMARY
+          echo "- Specific GitHub Copilot fix requests" >> $GITHUB_STEP_SUMMARY
+          echo "- Detailed vulnerability analysis" >> $GITHUB_STEP_SUMMARY
+          echo "- Upgrade path recommendations" >> $GITHUB_STEP_SUMMARY
+          echo "- Alternative solution suggestions" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Labels Applied:** \`security\`, \`vulnerability\`, \`ai-fix-requested\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Priority Labels:** \`critical\`, \`high-priority\` (based on severity)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 📋 Master Tracking Issue" >> $GITHUB_STEP_SUMMARY
+          echo "A comprehensive tracking issue has been created to monitor progress on all vulnerabilities." >> $GITHUB_STEP_SUMMARY
+          echo "This issue includes action items, AI assistance summary, and progress tracking." >> $GITHUB_STEP_SUMMARY
