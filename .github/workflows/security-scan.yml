@@ -254,12 +254,14 @@ jobs:
 
       # Step 5: Install GitHub Copilot CLI extension
       - name: Install GitHub Copilot CLI extension
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # GitHub CLI is pre-installed in ubuntu-latest runners
           echo "Using pre-installed GitHub CLI"
           gh --version
+          
+          # Clear any existing GitHub tokens from environment to avoid conflicts
+          unset GITHUB_TOKEN
+          unset GH_TOKEN
           
           # Configure git credentials to use the token
           git config --global credential.helper store
@@ -279,7 +281,7 @@ jobs:
             git_protocol: https
           EOF
           
-          # Alternative authentication method - use gh auth login with token
+          # Use token directly without environment variable conflicts
           echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
           
           # Verify authentication works
