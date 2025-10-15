@@ -437,76 +437,66 @@ jobs:
           
           chmod +x copilot-fixes.sh
 
-      # Step 6: Apply AI-inspired generated fixes
-      - name: Apply security fixes
+      # Step 6: Apply test changes (README update instead of npm fixes)
+      - name: Apply test changes for PR logic
         id: apply_copilot_fixes
         run: |
-          echo "🔧 Applying AI-inspired security fixes..."
+          echo "🔧 Testing PR creation logic with README update..."
           
-          # Install current dependencies first
-          npm ci
+          # Skip npm-based fixes and just update README for testing
+          echo "Skipping npm-based vulnerability fixes as requested"
           
-          # Apply the fixes
-          ./copilot-fixes.sh
-          
-          # Check if changes were made
-          if ! cmp -s package.json package.json.backup; then
+          # Update README.md with security scan information
+          if [ -f README.md ]; then
+            cp README.md README.md.backup
+            
+            # Add security scan information to README
+            echo "" >> README.md
+            echo "## 🔒 Security Status" >> README.md
+            echo "" >> README.md
+            echo "Last security scan: $(date)" >> README.md
+            echo "Vulnerabilities detected: ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }}" >> README.md
+            echo "" >> README.md
+            echo "This project uses automated security scanning to detect and address vulnerabilities." >> README.md
+            echo "Security fixes are managed through AI-assisted analysis and pull requests." >> README.md
+            echo "" >> README.md
+            echo "> **Note**: This section was added by automated security workflow for testing PR logic." >> README.md
+            
             echo "package_updated=true" >> $GITHUB_OUTPUT
-            echo "✅ Package.json was updated with security fixes"
+            echo "✅ README.md was updated for testing PR logic"
           else
             echo "package_updated=false" >> $GITHUB_OUTPUT
-            echo "ℹ️  No changes were made to package.json"
+            echo "ℹ️  No README.md found to update"
           fi
           
           # Generate a summary of changes
-          echo "## Applied Security Fixes" > applied-fixes.md
+          echo "## Applied Test Changes" > applied-fixes.md
           echo "" >> applied-fixes.md
-          echo "### Package Changes" >> applied-fixes.md
-          if [ -f package.json.backup ]; then
+          echo "### README Changes (for testing PR logic)" >> applied-fixes.md
+          if [ -f README.md.backup ]; then
             echo "\`\`\`diff" >> applied-fixes.md
-            diff package.json.backup package.json >> applied-fixes.md || true
+            diff README.md.backup README.md >> applied-fixes.md || true
             echo "\`\`\`" >> applied-fixes.md
           fi
 
-      # Step 7: Test fixes and validate
-      - name: Validate security fixes
+      # Step 7: Validate test changes (skip npm validation)
+      - name: Validate test changes
         if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
         run: |
-          echo "🧪 Testing applied security fixes..."
+          echo "🧪 Validating README update for PR testing..."
           
-          # Install updated dependencies
-          echo "Installing updated dependencies..."
-          npm ci
+          # Skip npm-related validation
+          echo "Skipping npm install, test, and build validation as requested"
+          echo "This is a test run focusing only on PR creation logic"
           
-          # Check if there are missing dev dependencies and install them
-          echo "Checking for missing Babel dependencies..."
-          npm install @babel/plugin-transform-runtime --save-dev --silent 2>/dev/null || echo "Babel plugin not needed or already present"
-          
-          # Run available tests
-          echo "Running tests..."
-          npm test --if-present || echo "⚠️  No tests found or tests failed"
-          
-          # Try to build the application with better error handling
-          echo "Attempting to build application..."
-          if npm run build --if-present 2>/dev/null; then
-            echo "✅ Build completed successfully"
+          # Just verify the README was updated correctly
+          if [ -f README.md ] && grep -q "Security Status" README.md; then
+            echo "✅ README.md update successful"
           else
-            echo "⚠️  Build failed - this might be due to missing dev dependencies or configuration issues"
-            echo "Checking if package.json has a build script..."
-            if jq -e '.scripts.build' package.json > /dev/null 2>&1; then
-              echo "Build script exists but failed - might need additional dependencies"
-              echo "Trying to install common missing dependencies..."
-              npm install @babel/core @babel/preset-env @babel/preset-react --save-dev --silent 2>/dev/null || true
-              echo "Retrying build with additional dependencies..."
-              npm run build 2>/dev/null || echo "Build still failing - manual intervention may be needed"
-            else
-              echo "No build script found in package.json - skipping build validation"
-            fi
+            echo "❌ README.md update failed"
           fi
           
-          # Run a basic security check
-          echo "Running post-fix security audit..."
-          npm audit --audit-level=high || echo "⚠️  Some vulnerabilities may remain - this is expected during validation"
+          echo "Test validation complete - focusing on PR creation workflow"
 
       # Step 8: Upload comprehensive artifacts
       - name: Upload fix artifacts
@@ -541,17 +531,20 @@ jobs:
           git checkout -b $BRANCH_NAME
           
           # Add all changed files
-          git add package.json package-lock.json copilot-fixes.sh copilot-analysis.md applied-fixes.md || true
+          git add README.md applied-fixes.md copilot-analysis.md || true
           
           # Create comprehensive commit message
-          COMMIT_MSG="🤖🔒 AI-Inspired: Automated security vulnerability fixes
+          COMMIT_MSG="🤖� AI-Workflow Test: README update for PR logic testing
 
-          Applied intelligent fixes for ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }} high/critical vulnerabilities.
+          Testing automated PR creation workflow with README update instead of npm fixes.
           
-          Generated by intelligent vulnerability analysis and applied automatically.
+          This commit tests the AI workflow's ability to:
+          - Detect vulnerabilities (${{ needs.vulnerability-detection.outputs.vulnerabilities-found }} found)
+          - Create branches and commits
+          - Generate pull requests
           
-          Analysis method: Rule-based Analysis
-          Fix date: $(date)
+          Analysis method: Rule-based Analysis (npm fixes skipped)
+          Test date: $(date)
           
           Co-authored-by: GitHub Actions <actions@github.com>"
           
@@ -562,9 +555,9 @@ jobs:
           
           # Create labels if they don't exist
           echo "Creating repository labels..."
-          gh label create "security" --description "Security-related changes" --color "d73a4a" --force || echo "Security label exists"
-          gh label create "ai-inspired" --description "AI-generated or AI-inspired changes" --color "0052cc" --force || echo "AI-inspired label exists"
-          gh label create "automated-fix" --description "Automated fixes applied" --color "1d76db" --force || echo "Automated-fix label exists"
+          gh label create "testing" --description "Testing and validation changes" --color "f9c513" --force || echo "Testing label exists"
+          gh label create "ai-workflow" --description "AI workflow testing and development" --color "0052cc" --force || echo "AI-workflow label exists"
+          gh label create "automated" --description "Automated changes applied" --color "1d76db" --force || echo "Automated label exists"
           
           # Generate PR URL for manual creation and try automatic creation
           PR_URL="https://github.com/${{ github.repository }}/compare/main...$BRANCH_NAME?quick_pull=1"
@@ -573,17 +566,17 @@ jobs:
           # Try to create PR using GitHub CLI (with fallback to manual)
           echo "Attempting to create pull request..."
           
-          PR_TITLE="🤖🔒 AI-Inspired: Intelligent security fixes ($(date +%Y-%m-%d))"
+          PR_TITLE="🤖� AI-Workflow Test: README update for PR logic testing ($(date +%Y-%m-%d))"
           
           # Try creating PR with GitHub CLI using simple body
           if gh pr create \
             --title "$PR_TITLE" \
-            --body "🤖� AI-Inspired Security Vulnerability Fixes - Automated security fixes for high and critical vulnerabilities. Check workflow artifacts for detailed analysis." \
+            --body "🤖📝 AI-Workflow Testing - Testing automated PR creation logic with README update instead of npm fixes. This validates the workflow's ability to detect vulnerabilities and create PRs without applying actual dependency fixes." \
             --head "$BRANCH_NAME" \
             --base "main" \
-            --label "security" \
-            --label "ai-inspired" \
-            --label "automated-fix" 2>/dev/null; then
+            --label "testing" \
+            --label "ai-workflow" \
+            --label "automated" 2>/dev/null; then
             echo "✅ Pull request created successfully via GitHub CLI"
             PR_CREATED="true"
           else
@@ -603,13 +596,14 @@ jobs:
           fi
 
       # Step 7: PR Creation Summary
-      - name: AI-Inspired Fix Summary
+      - name: AI-Workflow Test Summary
         if: always()
         run: |
-          echo "## 🤖 AI-Powered Security Fix Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🤖📝 AI-Workflow Testing Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Analysis Date:** $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "**Vulnerabilities Processed:** ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Date:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "**Vulnerabilities Detected:** ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Test Mode:** README update (npm fixes skipped)" >> $GITHUB_STEP_SUMMARY
           
           # Show detailed analysis method detection
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -630,7 +624,7 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ steps.create_branch.outputs.BRANCH_NAME }}" != "" ]; then
-            echo "**🤖 AI Fixes Applied:** ✅ Yes" >> $GITHUB_STEP_SUMMARY
+            echo "**🤖 Test Changes Applied:** ✅ Yes (README updated)" >> $GITHUB_STEP_SUMMARY
             echo "**🌿 Branch Created:** ✅ Yes (${{ steps.create_branch.outputs.BRANCH_NAME }})" >> $GITHUB_STEP_SUMMARY
             
             if [ "${{ steps.create_branch.outputs.PR_CREATED }}" = "true" ]; then
@@ -640,37 +634,40 @@ jobs:
               echo "**�🔗 Create PR:** [Click here to create PR](${{ steps.create_branch.outputs.PR_URL }})" >> $GITHUB_STEP_SUMMARY
             fi
           else
-            echo "**🤖 AI Fixes Applied:** ❌ No changes generated" >> $GITHUB_STEP_SUMMARY
+            echo "**🤖 Test Changes Applied:** ❌ No changes generated" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**📊 Artifacts:** Check 'ai-security-fixes' for detailed analysis and fixes" >> $GITHUB_STEP_SUMMARY
+          echo "**📊 Artifacts:** Check 'ai-security-fixes' for detailed analysis" >> $GITHUB_STEP_SUMMARY
           
-          # Add explanation about Copilot availability
+          # Add explanation about test mode
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🧪 Test Mode Information" >> $GITHUB_STEP_SUMMARY
+          echo "This workflow run is in **test mode** and skips npm-based vulnerability fixes." >> $GITHUB_STEP_SUMMARY
+          echo "Instead, it updates the README.md file to test the PR creation logic." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**What was tested:**" >> $GITHUB_STEP_SUMMARY
+          echo "- Vulnerability detection and analysis" >> $GITHUB_STEP_SUMMARY
+          echo "- Branch creation and commits" >> $GITHUB_STEP_SUMMARY
+          echo "- Pull request creation workflow" >> $GITHUB_STEP_SUMMARY
+          echo "- GitHub CLI integration" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🚀 Next Steps" >> $GITHUB_STEP_SUMMARY
           if [ "${{ steps.create_branch.outputs.BRANCH_NAME }}" != "" ]; then
             if [ "${{ steps.create_branch.outputs.PR_CREATED }}" = "true" ]; then
-              echo "1. **Review the automatically created pull request** in the repository" >> $GITHUB_STEP_SUMMARY
-              echo "2. **Test the security fixes** to ensure no breaking changes" >> $GITHUB_STEP_SUMMARY
-              echo "3. **Merge the PR** once testing is complete" >> $GITHUB_STEP_SUMMARY
+              echo "1. **Review the test pull request** in the repository" >> $GITHUB_STEP_SUMMARY
+              echo "2. **Verify the README changes** to confirm workflow functionality" >> $GITHUB_STEP_SUMMARY
+              echo "3. **Close or merge the test PR** as appropriate" >> $GITHUB_STEP_SUMMARY
             else
-              echo "1. **[Create Pull Request](${{ steps.create_branch.outputs.PR_URL }})** to review and merge the security fixes" >> $GITHUB_STEP_SUMMARY
+              echo "1. **[Create Test Pull Request](${{ steps.create_branch.outputs.PR_URL }})** to complete the workflow test" >> $GITHUB_STEP_SUMMARY
               echo "2. **Review the changes** in the generated branch: \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
-              echo "3. **Test the application** to ensure no breaking changes" >> $GITHUB_STEP_SUMMARY
-              echo "4. **Merge the PR** once testing is complete" >> $GITHUB_STEP_SUMMARY
+              echo "3. **Verify the README update** confirms the workflow is working" >> $GITHUB_STEP_SUMMARY
+              echo "4. **Close the test PR** after verification" >> $GITHUB_STEP_SUMMARY
               echo "" >> $GITHUB_STEP_SUMMARY
               echo "**Manual PR Creation Link:** ${{ steps.create_branch.outputs.PR_URL }}" >> $GITHUB_STEP_SUMMARY
             fi
             echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Branch with fixes:** \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "**Test branch:** \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
           else
-            echo "No security fixes were needed at this time." >> $GITHUB_STEP_SUMMARY
+            echo "No test changes were applied. Check the workflow logs for issues." >> $GITHUB_STEP_SUMMARY
           fi
-          
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### GitHub Copilot Information" >> $GITHUB_STEP_SUMMARY
-          echo "GitHub Copilot CLI requires:" >> $GITHUB_STEP_SUMMARY
-          echo "- GitHub Copilot subscription" >> $GITHUB_STEP_SUMMARY
-          echo "- Proper account permissions" >> $GITHUB_STEP_SUMMARY
-          echo "- Extension compatibility with Actions environment" >> $GITHUB_STEP_SUMMARY
