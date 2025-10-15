@@ -4,6 +4,7 @@ on:
   # Trigger on cron schedule (runs daily at 2 AM UTC)
   schedule:
     - cron: '0 2 * * *'
+  workflow_dispatch:
   
   # Trigger on pull requests
   pull_request:
@@ -234,17 +235,11 @@ jobs:
           name: vulnerability-data
           path: vulnerability-data/
 
-      # Step 3: Set up GitHub CLI authentication
-      - name: Set up GitHub CLI authentication
-        run: |
-          echo "${{ github.token }}" | gh auth login --with-token
-          gh auth status
-
       # Step 4: Create a single GitHub issue for all vulnerabilities
       - name: Create consolidated vulnerability issue
         uses: actions/github-script@v7
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         with:
           script: |
             const fs = require('fs');
