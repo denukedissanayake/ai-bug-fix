@@ -379,156 +379,11 @@ jobs:
           
           VULN_COUNT=$(jq 'length' vulnerability-data/detailed-vulnerabilities.json 2>/dev/null || echo "0")
           
-          # Create comprehensive tracking issue
-          TRACKING_TITLE="🔐 Security Vulnerability Tracking - $(date +%Y-%m-%d) ($VULN_COUNT issues)"
-          
-          # Create tracking issue body using printf
-          printf "## 🚨 Security Vulnerability Dashboard\n\n" > tracking_body.md
-          printf "**Scan Date:** %s\n" "$(date)" >> tracking_body.md
-          printf "**Total Vulnerabilities Found:** %s\n" "$VULN_COUNT" >> tracking_body.md
-          printf "**Workflow Run:** [%s](%s/%s/actions/runs/%s)\n\n" "${{ github.run_id }}" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" >> tracking_body.md
-          
-          printf "### 📊 Vulnerability Summary\n" >> tracking_body.md
-          printf "**Detected %s security vulnerabilities in this repository**\n\n" "$VULN_COUNT" >> tracking_body.md
-          
-          # Create a summary table of vulnerabilities
-          printf "| Severity | Package | Vulnerability | Fixed In |\n" >> tracking_body.md
-          printf "|----------|---------|--------------|----------|\n" >> tracking_body.md
-          
-          # Add each vulnerability to the summary table
-          jq -c '.[]' vulnerability-data/detailed-vulnerabilities.json | while IFS= read -r vuln; do
-            VULN_TITLE=$(echo "$vuln" | jq -r '.title // "Unknown Vulnerability"')
-            SEVERITY=$(echo "$vuln" | jq -r '.severity // "unknown"' | tr '[:lower:]' '[:upper:]')
-            PACKAGE_NAME=$(echo "$vuln" | jq -r '.packageName // "unknown"')
-            VERSION=$(echo "$vuln" | jq -r '.version // "unknown"')
-            FIXED_VERSION=$(echo "$vuln" | jq -r '.nearestFixedInVersion // "Not Available"')
-            
-            printf "| %s | %s@%s | %s | %s |\n" "$SEVERITY" "$PACKAGE_NAME" "$VERSION" "$VULN_TITLE" "$FIXED_VERSION" >> tracking_body.md
-          done
-          
-          printf "\n" >> tracking_body.md
-          printf "\n" >> tracking_body.md
-          
-          printf "### 🎯 Action Items\n" >> tracking_body.md
-          printf -- "- [ ] Review all created vulnerability issues\n" >> tracking_body.md
-          printf -- "- [ ] Prioritize critical and high severity vulnerabilities\n" >> tracking_body.md
-          printf -- "- [ ] Apply fixes suggested by GitHub Copilot\n" >> tracking_body.md
-          printf -- "- [ ] Test fixes in development environment\n" >> tracking_body.md
-          printf -- "- [ ] Deploy fixes to production\n" >> tracking_body.md
-          printf -- "- [ ] Close resolved vulnerability issues\n\n" >> tracking_body.md
-          
-          printf "### 🤖 AI Assistance\n" >> tracking_body.md
-          printf "All individual vulnerability issues have been tagged with \`ai-fix-requested\` and include specific requests for GitHub Copilot assistance. Each issue contains:\n" >> tracking_body.md
-          printf -- "- Detailed vulnerability analysis\n" >> tracking_body.md
-          printf -- "- Copilot fix requests with specific questions\n" >> tracking_body.md
-          printf -- "- Upgrade path recommendations\n" >> tracking_body.md
-          printf -- "- Alternative solution suggestions\n\n" >> tracking_body.md
-          
-          printf "### 📈 Progress Tracking\n" >> tracking_body.md
-          printf "Use this issue to track the overall progress of fixing the %s vulnerabilities detected in this scan.\n\n" "$VULN_COUNT" >> tracking_body.md
-          
-          printf "**Next Steps:**\n" >> tracking_body.md
-          printf "1. Review individual vulnerability issues created by this workflow\n" >> tracking_body.md
-          printf "2. Follow Copilot suggestions for each vulnerability\n" >> tracking_body.md
-          printf "3. Test and apply fixes systematically\n" >> tracking_body.md
-          printf "4. Update this tracking issue with progress\n\n" >> tracking_body.md
-          
-          printf "*This tracking issue was automatically created by the AI Security Scan workflow*\n" >> tracking_body.md
-          printf "*For detailed vulnerability information, check the individual issues linked above*\n" >> tracking_body.md
-          
-          # Verify tracking body exists
-          if [ ! -f "tracking_body.md" ]; then
-            printf "## 🚨 Security Vulnerability Dashboard\n\n" > tracking_body.md
-            printf "**Scan Date:** %s\n" "$(date)" >> tracking_body.md
-            printf "**Total Vulnerabilities Found:** %s\n\n" "$VULN_COUNT" >> tracking_body.md
-            printf "Please check the main security issue for details.\n" >> tracking_body.md
-          fi
-          
-          # Create the tracking issue - don't initially assign anyone
-          echo "Creating tracking issue..."
-          if TRACKING_URL=$(gh issue create \
-            --title "$TRACKING_TITLE" \
-            --body-file tracking_body.md \
-            --label "security,vulnerability,tracking,ai-fix-requested,copilot-task,scheduled" \
-            2>/dev/null); then
-            
-            echo "✅ Created tracking issue: $TRACKING_URL"
-            TRACKING_NUMBER=$(echo "$TRACKING_URL" | grep -o '[0-9]*$')
-            
-            # Direct assignment to GitHub Copilot using REST API (most reliable method)
-            echo "🤖 Directly assigning tracking issue #$TRACKING_NUMBER to GitHub Copilot..."
-            
-            # Assign GitHub Copilot to tracking issue
-            
-            # Method 1: Direct gh issue edit command
-            if gh issue edit "$TRACKING_NUMBER" --add-assignee "github-copilot[bot]" 2>/dev/null; then
-              echo "✅ Successfully assigned tracking issue #$TRACKING_NUMBER to Copilot using CLI method"
-            else
-              echo "⚠️ CLI assignment failed, trying REST API..."
-              
-              # Method 2: REST API with gh api
-              # Extract repository name from github.repository
-              REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
-              if gh api --method POST "/repos/${{ github.repository_owner }}/$REPO_NAME/issues/$TRACKING_NUMBER/assignees" \
-                --input - <<< '{"assignees":["github-copilot[bot]"]}' 2>/dev/null; then
-                echo "✅ Successfully assigned tracking issue #$TRACKING_NUMBER to Copilot using gh api"
-              else
-                echo "⚠️ gh api assignment failed, trying curl..."
-                
-                # Method 3: Direct curl request
-                if curl -s -X POST \
-                  -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                  -H "Accept: application/vnd.github.v3+json" \
-                  "https://api.github.com/repos/${{ github.repository_owner }}/$REPO_NAME/issues/$TRACKING_NUMBER/assignees" \
-                  -d '{"assignees":["github-copilot[bot]"]}' > /dev/null; then
-                  echo "✅ Successfully assigned tracking issue #$TRACKING_NUMBER to Copilot using curl"
-                else
-                  echo "⚠️ All assignment methods failed. Tracking issue created but not assigned to Copilot."
-                fi
-              fi
-            fi
-            
-            # End of tracking issue assignment attempts
-            
-            # Pin the tracking issue if possible
-            gh issue pin "$TRACKING_NUMBER" 2>/dev/null || echo "⚠️ Could not pin tracking issue (may not have permissions)"
-            
-            # Add Copilot coordination comment to tracking issue
-            printf "## 🤖 GitHub Copilot Coordination Request\n\n" > tracking_copilot_comment.md
-            printf "@github-copilot please coordinate the resolution of %s security vulnerabilities detected in this scan:\n\n" "$VULN_COUNT" >> tracking_copilot_comment.md
-            printf "**Master Coordination Tasks:**\n" >> tracking_copilot_comment.md
-            printf "1. **Priority Assessment:** Review all %s vulnerability issues and recommend fixing order\n" "$VULN_COUNT" >> tracking_copilot_comment.md
-            printf "2. **Dependency Analysis:** Check for conflicts between vulnerability fixes\n" >> tracking_copilot_comment.md
-            printf "3. **Batch Processing:** Suggest which vulnerabilities can be fixed together safely\n" >> tracking_copilot_comment.md
-            printf "4. **Risk Assessment:** Identify which fixes have highest impact vs. risk\n" >> tracking_copilot_comment.md
-            printf "5. **Testing Strategy:** Recommend comprehensive testing approach for all fixes\n\n" >> tracking_copilot_comment.md
-            printf "**Individual Issue Actions:**\n" >> tracking_copilot_comment.md
-            printf "- Each vulnerability has its own issue with specific fix requests\n" >> tracking_copilot_comment.md
-            printf "- All issues are labeled with \`copilot-task\` for your attention\n" >> tracking_copilot_comment.md
-            printf "- Please provide specific npm/yarn commands for each vulnerability\n" >> tracking_copilot_comment.md
-            printf "- Include compatibility and breaking change analysis\n\n" >> tracking_copilot_comment.md
-            printf "**Expected Deliverables:**\n" >> tracking_copilot_comment.md
-            printf "1. **Fix Priority Matrix:** Order of vulnerability resolution\n" >> tracking_copilot_comment.md
-            printf "2. **Batch Fix Commands:** Grouped update commands where safe\n" >> tracking_copilot_comment.md
-            printf "3. **Testing Checklist:** What to verify after each fix\n" >> tracking_copilot_comment.md
-            printf "4. **Rollback Plan:** How to revert if fixes cause issues\n\n" >> tracking_copilot_comment.md
-            printf "**Scan Details:**\n" >> tracking_copilot_comment.md
-            printf "- **Workflow Run:** [%s](%s/%s/actions/runs/%s)\n" "${{ github.run_id }}" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" >> tracking_copilot_comment.md
-            printf "- **Scan Date:** %s\n" "$(date)" >> tracking_copilot_comment.md
-            printf "- **Repository:** %s\n\n" "${{ github.repository }}" >> tracking_copilot_comment.md
-            printf "Please coordinate responses across all vulnerability issues and provide an overall fix strategy here.\n\n" >> tracking_copilot_comment.md
-            printf "*This is an automated coordination request from the AI Security Scan workflow*\n" >> tracking_copilot_comment.md
-            
-            # Add the Copilot coordination comment
-            if gh issue comment "$TRACKING_NUMBER" --body-file tracking_copilot_comment.md 2>/dev/null; then
-              echo "✅ Added Copilot coordination comment to tracking issue #$TRACKING_NUMBER"
-            else
-              echo "⚠️ Failed to add Copilot coordination comment to tracking issue #$TRACKING_NUMBER"
-            fi
-            
-          else
-            echo "❌ Failed to create tracking issue"
-          fi
+          # Skip creating tracking issue - not needed
+          echo "No need to create a tracking issue"
+          # Bypass the remaining tracking issue code
+          # Skip tracking issue creation
+          echo "Skipping tracking issue creation to simplify workflow"
 
       # No additional steps needed as we now create only a single issue
 
@@ -556,18 +411,15 @@ jobs:
           
           echo "### 🤖 GitHub Copilot Integration" >> $GITHUB_STEP_SUMMARY
           echo "The security vulnerability issue includes:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Automatic Assignment:** Issue assigned to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ **Automatic Assignment:** Issue assigned to GitHub Copilot" >> $GITHUB_STEP_SUMMARY
           echo "- 🎯 **Specific Fix Requests:** Detailed Copilot assistance requests" >> $GITHUB_STEP_SUMMARY
           echo "- 📋 **Actionable Tasks:** Clear requirements for fix commands" >> $GITHUB_STEP_SUMMARY
           echo "- 🔍 **Vulnerability Analysis:** Comprehensive security context" >> $GITHUB_STEP_SUMMARY
           echo "- 🚀 **Priority Classification:** Critical/High priority labeling" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Labels Applied:** \`security\`, \`vulnerability\`, \`ai-fix-requested\`, \`copilot-task\`, \`scheduled\`" >> $GITHUB_STEP_SUMMARY
-          echo "**Priority Labels:** \`critical\`, \`high-priority\` (based on severity)" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🎯 Consolidated Report" >> $GITHUB_STEP_SUMMARY
-          echo "A single consolidated vulnerability report issue has been created with:" >> $GITHUB_STEP_SUMMARY
-          echo "- Complete vulnerability analysis for Copilot review" >> $GITHUB_STEP_SUMMARY
-          echo "- Automatic assignment to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
-          echo "- Comprehensive fix request with specific objectives" >> $GITHUB_STEP_SUMMARY
-          echo "- Expected response format and priority classification" >> $GITHUB_STEP_SUMMARY
+          
+          echo "### 📝 Workflow Notes" >> $GITHUB_STEP_SUMMARY
+          echo "- Tracking issue creation has been disabled to simplify the workflow" >> $GITHUB_STEP_SUMMARY
+          echo "- All vulnerability information is consolidated in a single issue" >> $GITHUB_STEP_SUMMARY
+          echo "- GitHub Copilot is automatically assigned to address all vulnerabilities" >> $GITHUB_STEP_SUMMARY
