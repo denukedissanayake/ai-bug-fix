@@ -217,6 +217,9 @@ jobs:
     needs: vulnerability-detection
     if: needs.vulnerability-detection.outputs.has-vulnerabilities == 'true'
     
+    outputs:
+      package_updated: ${{ steps.apply_copilot_fixes.outputs.package_updated }}
+    
     permissions:
       contents: write
       pull-requests: write
@@ -243,51 +246,59 @@ jobs:
       # Step 4: Install GitHub CLI and Copilot CLI
       - name: Install GitHub CLI and GitHub Copilot CLI
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Install GitHub CLI (more reliable method from reference)
-          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg \
-          && sudo chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg \
-          && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null \
-          && sudo apt update \
-          && sudo apt install gh -y
+          # Ensure GitHub CLI is installed
+          if ! command -v gh &> /dev/null; then
+            echo "Installing GitHub CLI..."
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update
+            sudo apt install gh -y
+          fi
           
-          # Verify GitHub CLI authentication (GH_TOKEN is automatically used)
-          echo "Verifying GitHub CLI authentication..."
-          gh auth status
+          # Configure GitHub CLI with proper authentication
+          echo "Configuring GitHub CLI authentication..."
           
-          # Try to install GitHub Copilot CLI extension (using method from reference)
+          # Set the token explicitly
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+          
+          # Verify authentication
+          if gh auth status; then
+            echo "✅ GitHub CLI authenticated successfully"
+          else
+            echo "❌ GitHub CLI authentication failed"
+            exit 1
+          fi
+          
+          # Configure git credentials to use the token
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com" > ~/.git-credentials
+          
+          # Try to install GitHub Copilot CLI extension (with proper error handling)
           echo "Installing GitHub Copilot CLI extension..."
-          if gh extension install github/gh-copilot; then
-            echo "✅ GitHub Copilot CLI extension installed successfully"
+          if gh extension install github/gh-copilot 2>/dev/null || gh extension list | grep -q "gh-copilot"; then
+            echo "✅ GitHub Copilot CLI extension available"
             
-            # Verify Copilot CLI is working
+            # Test Copilot CLI functionality
             if gh copilot --help >/dev/null 2>&1; then
-              echo "✅ GitHub Copilot CLI is available and working"
-              gh copilot --version || echo "Could not get Copilot version"
+              echo "✅ GitHub Copilot CLI is working"
             else
-              echo "❌ GitHub Copilot CLI installed but not working"
+              echo "⚠️ GitHub Copilot CLI installed but not functional (may require subscription)"
             fi
           else
-            echo "⚠️  GitHub Copilot CLI extension installation failed"
-            echo "This may be due to:"
-            echo "- No GitHub Copilot subscription"
-            echo "- Extension not available for this account"
-            echo "- Network or permission issues"
+            echo "⚠️ GitHub Copilot CLI extension installation failed or not available"
           fi
           
-          # List installed extensions for debugging
-          echo "Currently installed GitHub CLI extensions:"
-          gh extension list || echo "No extensions installed"
-          
-          # Check GitHub Copilot subscription status
-          echo "Checking GitHub Copilot subscription status..."
-          if gh api /user/copilot/billing 2>/dev/null; then
-            echo "✅ GitHub Copilot subscription detected"
-          else
-            echo "❌ No GitHub Copilot subscription found"
-            echo "GitHub Copilot CLI requires an active subscription"
-          fi
+          # Debug information
+          echo "=== GitHub CLI Debug Information ==="
+          echo "GitHub CLI version: $(gh --version)"
+          echo "Authentication status:"
+          gh auth status 2>/dev/null || echo "Auth status check failed"
+          echo "Available extensions:"
+          gh extension list 2>/dev/null || echo "No extensions or list failed"
+          echo "===================================="
 
       # Step 5: Analyze vulnerabilities with GitHub Copilot
       - name: Generate fixes with GitHub Copilot
@@ -586,8 +597,23 @@ jobs:
           
           # Create the PR using peter-evans action approach
           echo "All files prepared for PR creation"
+          echo "PACKAGE_UPDATED=true" >> $GITHUB_OUTPUT
 
-      # Step 8b: Create branch and commit changes (manual PR approach)
+      # Step 9: Upload comprehensive artifacts
+      - name: Upload fix artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ai-security-fixes
+          path: |
+            copilot-fixes.sh
+            copilot-analysis.md
+            copilot-suggestions.txt
+            applied-fixes.md
+            package.json.backup
+            vulnerability-data/
+
+      # Step 10: Update job summary (without PR creation)
       - name: Create security fix branch and commit
         id: create_branch
         if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
@@ -631,12 +657,41 @@ jobs:
           gh label create "ai-inspired" --description "AI-generated or AI-inspired changes" --color "0052cc" --force || echo "AI-inspired label exists"
           gh label create "automated-fix" --description "Automated fixes applied" --color "1d76db" --force || echo "Automated-fix label exists"
           
-          # Generate PR URL for manual creation
+          # Generate PR URL for manual creation and try automatic creation
           PR_URL="https://github.com/${{ github.repository }}/compare/main...$BRANCH_NAME?quick_pull=1"
           echo "PR_URL=$PR_URL" >> $GITHUB_OUTPUT
           
+          # Try to create PR using GitHub CLI (with fallback to manual)
+          echo "Attempting to create pull request..."
+          
+          PR_TITLE="🤖🔒 AI-Inspired: Intelligent security fixes ($(date +%Y-%m-%d))"
+          
+          # Try creating PR with GitHub CLI using simple body
+          if gh pr create \
+            --title "$PR_TITLE" \
+            --body "🤖� AI-Inspired Security Vulnerability Fixes - Automated security fixes for high and critical vulnerabilities. Check workflow artifacts for detailed analysis." \
+            --head "$BRANCH_NAME" \
+            --base "main" \
+            --label "security" \
+            --label "ai-inspired" \
+            --label "automated-fix" 2>/dev/null; then
+            echo "✅ Pull request created successfully via GitHub CLI"
+            PR_CREATED="true"
+          else
+            echo "⚠️ GitHub CLI PR creation failed - manual creation required"
+            echo "This is expected due to GitHub Actions security restrictions"
+            PR_CREATED="false"
+          fi
+          
+          echo "PR_CREATED=$PR_CREATED" >> $GITHUB_OUTPUT
+          
           echo "Branch created successfully: $BRANCH_NAME"
-          echo "PR URL: $PR_URL"
+          if [ "$PR_CREATED" = "true" ]; then
+            echo "Pull request created automatically"
+          else
+            echo "Manual PR creation required - link provided below"
+            echo "PR URL: $PR_URL"
+          fi
 
       # Step 9: Upload comprehensive artifacts
       - name: Upload fix artifacts
@@ -682,7 +737,13 @@ jobs:
           if [ "${{ steps.create_branch.outputs.BRANCH_NAME }}" != "" ]; then
             echo "**🤖 AI Fixes Applied:** ✅ Yes" >> $GITHUB_STEP_SUMMARY
             echo "**🌿 Branch Created:** ✅ Yes (${{ steps.create_branch.outputs.BRANCH_NAME }})" >> $GITHUB_STEP_SUMMARY
-            echo "**🔗 Create PR:** [Click here to create PR](${{ steps.create_branch.outputs.PR_URL }})" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "${{ steps.create_branch.outputs.PR_CREATED }}" = "true" ]; then
+              echo "**� Pull Request:** ✅ Created automatically" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "**📋 Pull Request:** ⚠️ Manual creation required" >> $GITHUB_STEP_SUMMARY
+              echo "**�🔗 Create PR:** [Click here to create PR](${{ steps.create_branch.outputs.PR_URL }})" >> $GITHUB_STEP_SUMMARY
+            fi
           else
             echo "**🤖 AI Fixes Applied:** ❌ No changes generated" >> $GITHUB_STEP_SUMMARY
           fi
@@ -694,13 +755,20 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🚀 Next Steps" >> $GITHUB_STEP_SUMMARY
           if [ "${{ steps.create_branch.outputs.BRANCH_NAME }}" != "" ]; then
-            echo "1. **[Create Pull Request](${{ steps.create_branch.outputs.PR_URL }})** to review and merge the security fixes" >> $GITHUB_STEP_SUMMARY
-            echo "2. **Review the changes** in the generated branch: \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "3. **Test the application** to ensure no breaking changes" >> $GITHUB_STEP_SUMMARY
-            echo "4. **Merge the PR** once testing is complete" >> $GITHUB_STEP_SUMMARY
+            if [ "${{ steps.create_branch.outputs.PR_CREATED }}" = "true" ]; then
+              echo "1. **Review the automatically created pull request** in the repository" >> $GITHUB_STEP_SUMMARY
+              echo "2. **Test the security fixes** to ensure no breaking changes" >> $GITHUB_STEP_SUMMARY
+              echo "3. **Merge the PR** once testing is complete" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "1. **[Create Pull Request](${{ steps.create_branch.outputs.PR_URL }})** to review and merge the security fixes" >> $GITHUB_STEP_SUMMARY
+              echo "2. **Review the changes** in the generated branch: \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+              echo "3. **Test the application** to ensure no breaking changes" >> $GITHUB_STEP_SUMMARY
+              echo "4. **Merge the PR** once testing is complete" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "**Manual PR Creation Link:** ${{ steps.create_branch.outputs.PR_URL }}" >> $GITHUB_STEP_SUMMARY
+            fi
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Branch with fixes:** \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "**Direct PR Link:** ${{ steps.create_branch.outputs.PR_URL }}" >> $GITHUB_STEP_SUMMARY
           else
             echo "No security fixes were needed at this time." >> $GITHUB_STEP_SUMMARY
           fi
@@ -711,3 +779,180 @@ jobs:
           echo "- GitHub Copilot subscription" >> $GITHUB_STEP_SUMMARY
           echo "- Proper account permissions" >> $GITHUB_STEP_SUMMARY
           echo "- Extension compatibility with Actions environment" >> $GITHUB_STEP_SUMMARY
+
+  # Job 3: Create Pull Request
+  create-pull-request:
+    runs-on: ubuntu-latest
+    needs: [vulnerability-detection, github-copilot-fix]
+    if: needs.github-copilot-fix.outputs.package_updated == 'true'
+    
+    steps:
+      # Step 1: Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Node.js
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      # Step 3: Download vulnerability data
+      - name: Download vulnerability data
+        uses: actions/download-artifact@v4
+        with:
+          name: vulnerability-data
+          path: vulnerability-data/
+
+      # Step 4: Download security fixes
+      - name: Download security fixes
+        uses: actions/download-artifact@v4
+        with:
+          name: ai-security-fixes
+          path: ./
+
+      # Step 5: Install GitHub CLI
+      - name: Install GitHub CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Ensure GitHub CLI is installed
+          if ! command -v gh &> /dev/null; then
+            echo "Installing GitHub CLI..."
+            curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+            sudo apt update
+            sudo apt install gh -y
+          fi
+          
+          # Configure GitHub CLI with proper authentication
+          echo "Configuring GitHub CLI authentication..."
+          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+          
+          # Verify authentication
+          if gh auth status; then
+            echo "✅ GitHub CLI authenticated successfully"
+          else
+            echo "❌ GitHub CLI authentication failed"
+            exit 1
+          fi
+
+      # Step 6: Create security fix branch and commit (EXACT EXISTING CODE)
+      - name: Create security fix branch and commit
+        id: create_branch
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Create unique branch name
+          BRANCH_NAME="ai-security-fix-$(date +%Y%m%d-%H%M%S)"
+          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          
+          # Configure git
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Actions (AI Security Fixes)"
+          
+          # Create and switch to new branch
+          git checkout -b $BRANCH_NAME
+          
+          # Add all changed files
+          git add package.json package-lock.json copilot-fixes.sh copilot-analysis.md applied-fixes.md || true
+          
+          # Create comprehensive commit message
+          COMMIT_MSG="🤖🔒 AI-Inspired: Automated security vulnerability fixes
+
+          Applied intelligent fixes for ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }} high/critical vulnerabilities.
+          
+          Generated by intelligent vulnerability analysis and applied automatically.
+          
+          Analysis method: Rule-based Analysis
+          Fix date: $(date)
+          
+          Co-authored-by: GitHub Actions <actions@github.com>"
+          
+          git commit -m "$COMMIT_MSG"
+          
+          # Push the branch
+          git push origin $BRANCH_NAME
+          
+          # Create labels if they don't exist
+          echo "Creating repository labels..."
+          gh label create "security" --description "Security-related changes" --color "d73a4a" --force || echo "Security label exists"
+          gh label create "ai-inspired" --description "AI-generated or AI-inspired changes" --color "0052cc" --force || echo "AI-inspired label exists"
+          gh label create "automated-fix" --description "Automated fixes applied" --color "1d76db" --force || echo "Automated-fix label exists"
+          
+          # Generate PR URL for manual creation and try automatic creation
+          PR_URL="https://github.com/${{ github.repository }}/compare/main...$BRANCH_NAME?quick_pull=1"
+          echo "PR_URL=$PR_URL" >> $GITHUB_OUTPUT
+          
+          # Try to create PR using GitHub CLI (with fallback to manual)
+          echo "Attempting to create pull request..."
+          
+          PR_TITLE="🤖🔒 AI-Inspired: Intelligent security fixes ($(date +%Y-%m-%d))"
+          
+          # Try creating PR with GitHub CLI using simple body
+          if gh pr create \
+            --title "$PR_TITLE" \
+            --body "🤖🔒 AI-Inspired Security Vulnerability Fixes - Automated security fixes for high and critical vulnerabilities. Check workflow artifacts for detailed analysis." \
+            --head "$BRANCH_NAME" \
+            --base "main" \
+            --label "security" \
+            --label "ai-inspired" \
+            --label "automated-fix" 2>/dev/null; then
+            echo "✅ Pull request created successfully via GitHub CLI"
+            PR_CREATED="true"
+          else
+            echo "⚠️ GitHub CLI PR creation failed - manual creation required"
+            echo "This is expected due to GitHub Actions security restrictions"
+            PR_CREATED="false"
+          fi
+          
+          echo "PR_CREATED=$PR_CREATED" >> $GITHUB_OUTPUT
+          
+          echo "Branch created successfully: $BRANCH_NAME"
+          if [ "$PR_CREATED" = "true" ]; then
+            echo "Pull request created automatically"
+          else
+            echo "Manual PR creation required - link provided below"
+            echo "PR URL: $PR_URL"
+          fi
+
+      # Step 7: PR Creation Summary
+      - name: PR Creation Summary
+        run: |
+          echo "## 🚀 Pull Request Creation Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.create_branch.outputs.BRANCH_NAME }}" != "" ]; then
+            echo "**🌿 Branch Created:** ✅ Yes (${{ steps.create_branch.outputs.BRANCH_NAME }})" >> $GITHUB_STEP_SUMMARY
+            
+            if [ "${{ steps.create_branch.outputs.PR_CREATED }}" = "true" ]; then
+              echo "**📋 Pull Request:** ✅ Created automatically" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "**📋 Pull Request:** ⚠️ Manual creation required" >> $GITHUB_STEP_SUMMARY
+              echo "**🔗 Create PR:** [Click here to create PR](${{ steps.create_branch.outputs.PR_URL }})" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo "**🤖 AI Fixes Applied:** ❌ No changes generated" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### 🚀 Next Steps" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.create_branch.outputs.BRANCH_NAME }}" != "" ]; then
+            if [ "${{ steps.create_branch.outputs.PR_CREATED }}" = "true" ]; then
+              echo "1. **Review the automatically created pull request** in the repository" >> $GITHUB_STEP_SUMMARY
+              echo "2. **Test the security fixes** to ensure no breaking changes" >> $GITHUB_STEP_SUMMARY
+              echo "3. **Merge the PR** once testing is complete" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "1. **[Create Pull Request](${{ steps.create_branch.outputs.PR_URL }})** to review and merge the security fixes" >> $GITHUB_STEP_SUMMARY
+              echo "2. **Review the changes** in the generated branch: \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+              echo "3. **Test the application** to ensure no breaking changes" >> $GITHUB_STEP_SUMMARY
+              echo "4. **Merge the PR** once testing is complete" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "**Manual PR Creation Link:** ${{ steps.create_branch.outputs.PR_URL }}" >> $GITHUB_STEP_SUMMARY
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Branch with fixes:** \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "No security fixes were needed at this time." >> $GITHUB_STEP_SUMMARY
+          fi
