@@ -246,8 +246,8 @@ jobs:
       # Step 4: Install GitHub CLI and Copilot CLI
       - name: Install GitHub CLI and GitHub Copilot CLI
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # Ensure GitHub CLI is installed
           if ! command -v gh &> /dev/null; then
@@ -273,7 +273,7 @@ jobs:
             echo "Attempting alternative authentication method..."
             
             # Alternative: Set GITHUB_TOKEN explicitly
-            export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+            export GITHUB_TOKEN="${{ secrets.GH_TOKEN }}"
             if gh auth status; then
               echo "✅ GitHub CLI authenticated with alternative method"
             else
@@ -284,7 +284,7 @@ jobs:
           
           # Configure git credentials to use the token
           git config --global credential.helper store
-          echo "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com" > ~/.git-credentials
+          echo "https://x-access-token:${{ secrets.GH_TOKEN }}@github.com" > ~/.git-credentials
           
           # Try to install GitHub Copilot CLI extension (with proper error handling)
           echo "Installing GitHub Copilot CLI extension..."
@@ -313,7 +313,7 @@ jobs:
       # Step 5: Analyze vulnerabilities with GitHub Copilot
       - name: Generate fixes with GitHub Copilot
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "🤖 Using GitHub Copilot to analyze and fix vulnerabilities..."
@@ -517,7 +517,7 @@ jobs:
       - name: Create AI-Inspired Security Fix PR
         if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
           # Configure git
@@ -628,7 +628,7 @@ jobs:
         id: create_branch
         if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # Create unique branch name
           BRANCH_NAME="ai-security-fix-$(date +%Y%m%d-%H%M%S)"
@@ -810,7 +810,7 @@ jobs:
       # Step 5: Install GitHub CLI
       - name: Install GitHub CLI
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # Ensure GitHub CLI is installed
           if ! command -v gh &> /dev/null; then
@@ -833,7 +833,7 @@ jobs:
             echo "Attempting alternative authentication method..."
             
             # Alternative: Use token directly without login command
-            export GITHUB_TOKEN="${{ secrets.GITHUB_TOKEN }}"
+            export GITHUB_TOKEN="${{ secrets.GH_TOKEN }}"
             if gh auth status; then
               echo "✅ GitHub CLI authenticated with alternative method"
             else
@@ -846,7 +846,7 @@ jobs:
       - name: Create security fix branch and commit
         id: create_branch
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           # Create unique branch name
           BRANCH_NAME="ai-security-fix-$(date +%Y%m%d-%H%M%S)"
