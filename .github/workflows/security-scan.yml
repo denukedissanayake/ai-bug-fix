@@ -350,13 +350,77 @@ jobs:
               --title "$ISSUE_TITLE" \
               --body-file issue_body.md \
               --label "$LABELS" \
-              --assignee "${{ github.actor }}" \
               2>/dev/null); then
               
               echo "✅ Created issue: $ISSUE_URL"
               
               # Extract issue number from URL
               ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
+              
+              # Assign issue to GitHub Copilot SWE agent using GraphQL
+              echo "🤖 Attempting to assign issue #$ISSUE_NUMBER to GitHub Copilot..."
+              
+              # Create GraphQL query to find Copilot SWE agent
+              FIND_COPILOT_QUERY='{
+                "query": "query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 100) { nodes { login __typename ... on Bot { id } ... on User { id } } } } }",
+                "variables": {
+                  "owner": "${{ github.repository_owner }}",
+                  "repo": "${{ github.event.repository.name }}"
+                }
+              }'
+              
+              # Execute GraphQL query to find Copilot
+              COPILOT_RESPONSE=$(gh api graphql --input - <<< "$FIND_COPILOT_QUERY" 2>/dev/null || echo "")
+              
+              if [ -n "$COPILOT_RESPONSE" ]; then
+                # Extract Copilot actor ID
+                COPILOT_ID=$(echo "$COPILOT_RESPONSE" | jq -r '.data.repository.suggestedActors.nodes[] | select(.login == "copilot-swe-agent") | .id' 2>/dev/null || echo "")
+                
+                if [ -n "$COPILOT_ID" ] && [ "$COPILOT_ID" != "null" ]; then
+                  echo "✅ Found Copilot SWE agent with ID: $COPILOT_ID"
+                  
+                  # Get issue GraphQL ID
+                  GET_ISSUE_QUERY='{
+                    "query": "query($owner: String!, $repo: String!, $issueNumber: Int!) { repository(owner: $owner, name: $repo) { issue(number: $issueNumber) { id } } }",
+                    "variables": {
+                      "owner": "${{ github.repository_owner }}",
+                      "repo": "${{ github.event.repository.name }}",
+                      "issueNumber": '$ISSUE_NUMBER'
+                    }
+                  }'
+                  
+                  ISSUE_RESPONSE=$(gh api graphql --input - <<< "$GET_ISSUE_QUERY" 2>/dev/null || echo "")
+                  ISSUE_ID=$(echo "$ISSUE_RESPONSE" | jq -r '.data.repository.issue.id' 2>/dev/null || echo "")
+                  
+                  if [ -n "$ISSUE_ID" ] && [ "$ISSUE_ID" != "null" ]; then
+                    # Assign issue to Copilot using GraphQL mutation
+                    ASSIGN_MUTATION='{
+                      "query": "mutation($issueId: ID!, $actorId: ID!) { replaceActorsForAssignable(input: {assignableId: $issueId, actorIds: [$actorId]}) { assignable { ... on Issue { id title assignees(first: 10) { nodes { login } } } } } }",
+                      "variables": {
+                        "issueId": "'$ISSUE_ID'",
+                        "actorId": "'$COPILOT_ID'"
+                      }
+                    }'
+                    
+                    ASSIGN_RESPONSE=$(gh api graphql --input - <<< "$ASSIGN_MUTATION" 2>/dev/null || echo "")
+                    
+                    if [ -n "$ASSIGN_RESPONSE" ]; then
+                      ASSIGNEES=$(echo "$ASSIGN_RESPONSE" | jq -r '.data.replaceActorsForAssignable.assignable.assignees.nodes[].login' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+                      echo "✅ Successfully assigned issue #$ISSUE_NUMBER to Copilot"
+                      echo "Assignees: $ASSIGNEES"
+                    else
+                      echo "⚠️ Failed to assign issue to Copilot (mutation failed)"
+                    fi
+                  else
+                    echo "⚠️ Failed to get issue GraphQL ID"
+                  fi
+                else
+                  echo "⚠️ Copilot SWE agent not found in repository suggested actors"
+                  echo "Note: GitHub Copilot may not be enabled for this repository"
+                fi
+              else
+                echo "⚠️ Failed to query repository suggested actors"
+              fi
               
               # Add to tracking file
               echo "- [$SEVERITY] Issue #$ISSUE_NUMBER: $VULN_TITLE ($PACKAGE_NAME@$VERSION)" >> vulnerability-issues.md
