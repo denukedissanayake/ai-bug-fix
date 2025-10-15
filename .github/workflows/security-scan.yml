@@ -355,7 +355,7 @@ jobs:
           
           echo "Creating consolidated vulnerability issue..."
           
-          # Create the GitHub issue
+          # Create the GitHub issue - don't initially assign anyone
           if ISSUE_URL=$(gh issue create \
             --title "$ISSUE_TITLE" \
             --body-file consolidated_report.md \
@@ -365,69 +365,106 @@ jobs:
             echo "✅ Created consolidated issue: $ISSUE_URL"
             ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -o '[0-9]*$')
             
-            # Assign to GitHub Copilot using GraphQL
-            echo "🤖 Attempting to assign issue #$ISSUE_NUMBER to GitHub Copilot..."
+            # Direct assignment to GitHub Copilot using REST API (most reliable method)
+            echo "🤖 Directly assigning issue #$ISSUE_NUMBER to GitHub Copilot..."
             
-            # Create GraphQL query to find Copilot SWE agent
-            FIND_COPILOT_QUERY='{
-              "query": "query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 100) { nodes { login __typename ... on Bot { id } ... on User { id } } } } }",
-              "variables": {
-                "owner": "${{ github.repository_owner }}",
-                "repo": "${{ github.event.repository.name }}"
-              }
-            }'
+            # Try several methods to assign GitHub Copilot
+            echo "Attempting to assign GitHub Copilot using multiple methods..."
             
-            # Execute GraphQL query to find Copilot
-            COPILOT_RESPONSE=$(gh api graphql --input - <<< "$FIND_COPILOT_QUERY" 2>/dev/null || echo "")
-            
-            if [ -n "$COPILOT_RESPONSE" ]; then
-              # Extract Copilot actor ID
-              COPILOT_ID=$(echo "$COPILOT_RESPONSE" | jq -r '.data.repository.suggestedActors.nodes[] | select(.login == "copilot-swe-agent") | .id' 2>/dev/null || echo "")
+            # Method 1: Direct gh issue edit command
+            if gh issue edit "$ISSUE_NUMBER" --add-assignee "github-copilot[bot]" 2>/dev/null; then
+              echo "✅ Successfully assigned issue #$ISSUE_NUMBER to Copilot using CLI method"
+            else
+              echo "⚠️ CLI assignment failed, trying REST API..."
               
-              if [ -n "$COPILOT_ID" ] && [ "$COPILOT_ID" != "null" ]; then
-                echo "✅ Found Copilot SWE agent with ID: $COPILOT_ID"
+              # Method 2: REST API with gh api
+              # Extract repository name from github.repository
+              REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+              if gh api --method POST "/repos/${{ github.repository_owner }}/$REPO_NAME/issues/$ISSUE_NUMBER/assignees" \
+                --input - <<< '{"assignees":["github-copilot[bot]"]}' 2>/dev/null; then
+                echo "✅ Successfully assigned issue #$ISSUE_NUMBER to Copilot using gh api"
+              else
+                echo "⚠️ gh api assignment failed, trying curl..."
                 
-                # Get issue GraphQL ID
-                GET_ISSUE_QUERY='{
-                  "query": "query($owner: String!, $repo: String!, $issueNumber: Int!) { repository(owner: $owner, name: $repo) { issue(number: $issueNumber) { id } } }",
-                  "variables": {
-                    "owner": "${{ github.repository_owner }}",
-                    "repo": "${{ github.event.repository.name }}",
-                    "issueNumber": '$ISSUE_NUMBER'
-                  }
-                }'
+                # Method 3: Direct curl request
+                if curl -s -X POST \
+                  -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  "https://api.github.com/repos/${{ github.repository_owner }}/$REPO_NAME/issues/$ISSUE_NUMBER/assignees" \
+                  -d '{"assignees":["github-copilot[bot]"]}' > /dev/null; then
+                  echo "✅ Successfully assigned issue #$ISSUE_NUMBER to Copilot using curl"
+                else
+                  echo "⚠️ All assignment methods failed. Issue created but not assigned to Copilot."
+                fi
+              fi
+            fi
+            
+            # No GraphQL method - it's less reliable than direct REST API or CLI calls
+              
+              # Execute GraphQL query to find Copilot
+              COPILOT_RESPONSE=$(gh api graphql --input - <<< "$FIND_COPILOT_QUERY" 2>/dev/null || echo "")
+              
+              if [ -n "$COPILOT_RESPONSE" ]; then
+                # Extract Copilot actor ID - try both copilot-swe-agent and github-copilot[bot]
+                COPILOT_ID=$(echo "$COPILOT_RESPONSE" | jq -r '.data.repository.suggestedActors.nodes[] | select(.login == "copilot-swe-agent" or .login == "github-copilot[bot]") | .id' 2>/dev/null | head -1 || echo "")
                 
-                ISSUE_RESPONSE=$(gh api graphql --input - <<< "$GET_ISSUE_QUERY" 2>/dev/null || echo "")
-                ISSUE_ID=$(echo "$ISSUE_RESPONSE" | jq -r '.data.repository.issue.id' 2>/dev/null || echo "")
-                
-                if [ -n "$ISSUE_ID" ] && [ "$ISSUE_ID" != "null" ]; then
-                  # Assign issue to Copilot using GraphQL mutation
-                  ASSIGN_MUTATION='{
-                    "query": "mutation($issueId: ID!, $actorId: ID!) { replaceActorsForAssignable(input: {assignableId: $issueId, actorIds: [$actorId]}) { assignable { ... on Issue { id title assignees(first: 10) { nodes { login } } } } } }",
+                if [ -n "$COPILOT_ID" ] && [ "$COPILOT_ID" != "null" ]; then
+                  echo "✅ Found Copilot agent with ID: $COPILOT_ID"
+                  
+                  # Get issue GraphQL ID
+                  GET_ISSUE_QUERY='{
+                    "query": "query($owner: String!, $repo: String!, $issueNumber: Int!) { repository(owner: $owner, name: $repo) { issue(number: $issueNumber) { id } } }",
                     "variables": {
-                      "issueId": "'$ISSUE_ID'",
-                      "actorId": "'$COPILOT_ID'"
+                      "owner": "${{ github.repository_owner }}",
+                      "repo": "${{ github.event.repository.name }}",
+                      "issueNumber": '$ISSUE_NUMBER'
                     }
                   }'
                   
-                  ASSIGN_RESPONSE=$(gh api graphql --input - <<< "$ASSIGN_MUTATION" 2>/dev/null || echo "")
+                  ISSUE_RESPONSE=$(gh api graphql --input - <<< "$GET_ISSUE_QUERY" 2>/dev/null || echo "")
+                  ISSUE_ID=$(echo "$ISSUE_RESPONSE" | jq -r '.data.repository.issue.id' 2>/dev/null || echo "")
                   
-                  if [ -n "$ASSIGN_RESPONSE" ]; then
-                    ASSIGNEES=$(echo "$ASSIGN_RESPONSE" | jq -r '.data.replaceActorsForAssignable.assignable.assignees.nodes[].login' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
-                    echo "✅ Successfully assigned issue #$ISSUE_NUMBER to Copilot"
-                    echo "Assignees: $ASSIGNEES"
+                  if [ -n "$ISSUE_ID" ] && [ "$ISSUE_ID" != "null" ]; then
+                    # Assign issue to Copilot using GraphQL mutation
+                    ASSIGN_MUTATION='{
+                      "query": "mutation($issueId: ID!, $actorId: ID!) { addAssigneesToAssignable(input: {assignableId: $issueId, assigneeIds: [$actorId]}) { assignable { ... on Issue { id title assignees(first: 10) { nodes { login } } } } } }",
+                      "variables": {
+                        "issueId": "'$ISSUE_ID'",
+                        "actorId": "'$COPILOT_ID'"
+                      }
+                    }'
+                    
+                    ASSIGN_RESPONSE=$(gh api graphql --input - <<< "$ASSIGN_MUTATION" 2>/dev/null || echo "")
+                    
+                    if [ -n "$ASSIGN_RESPONSE" ]; then
+                      ASSIGNEES=$(echo "$ASSIGN_RESPONSE" | jq -r '.data.addAssigneesToAssignable.assignable.assignees.nodes[].login' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+                      echo "✅ Successfully assigned issue #$ISSUE_NUMBER to Copilot"
+                      echo "Assignees: $ASSIGNEES"
+                    else
+                      echo "⚠️ Failed to assign issue to Copilot (GraphQL mutation failed)"
+                      # Try REST API as a final attempt
+                      gh api --method POST repos/:owner/:repo/issues/$ISSUE_NUMBER/assignees -f assignees='["github-copilot[bot]"]' 2>/dev/null && \
+                        echo "✅ Successfully assigned issue using REST API" || echo "⚠️ REST API assignment also failed"
+                    fi
                   else
-                    echo "⚠️ Failed to assign issue to Copilot (mutation failed)"
+                    echo "⚠️ Failed to get issue GraphQL ID"
                   fi
                 else
-                  echo "⚠️ Failed to get issue GraphQL ID"
+                  echo "⚠️ Copilot agent not found in repository suggested actors"
+                  echo "Trying direct REST API call to assign GitHub Copilot..."
+                  
+                  # Try REST API as a final attempt
+                  gh api --method POST repos/:owner/:repo/issues/$ISSUE_NUMBER/assignees -f assignees='["github-copilot[bot]"]' 2>/dev/null && \
+                    echo "✅ Successfully assigned issue using REST API" || echo "⚠️ REST API assignment also failed"
                 fi
               else
-                echo "⚠️ Copilot SWE agent not found in repository suggested actors"
-                echo "Note: GitHub Copilot may not be enabled for this repository"
+                echo "⚠️ Failed to query repository suggested actors"
+                echo "Trying direct REST API call to assign GitHub Copilot..."
+                
+                # Try REST API as a final attempt
+                gh api --method POST repos/:owner/:repo/issues/$ISSUE_NUMBER/assignees -f assignees='["github-copilot[bot]"]' 2>/dev/null && \
+                  echo "✅ Successfully assigned issue using REST API" || echo "⚠️ REST API assignment also failed"
               fi
-            else
-              echo "⚠️ Failed to query repository suggested actors"
             fi
             
             # Pin the issue if possible
@@ -451,11 +488,24 @@ jobs:
           printf "**Workflow Run:** [%s](%s/%s/actions/runs/%s)\n\n" "${{ github.run_id }}" "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}" >> tracking_body.md
           
           printf "### 📊 Vulnerability Summary\n" >> tracking_body.md
-          if [ -f vulnerability-issues.md ]; then
-            tail -n +5 vulnerability-issues.md >> tracking_body.md 2>/dev/null || printf "No vulnerability details available\n" >> tracking_body.md
-          else
-            printf "No vulnerability details available\n" >> tracking_body.md
-          fi
+          printf "**Detected %s security vulnerabilities in this repository**\n\n" "$VULN_COUNT" >> tracking_body.md
+          
+          # Create a summary table of vulnerabilities
+          printf "| Severity | Package | Vulnerability | Fixed In |\n" >> tracking_body.md
+          printf "|----------|---------|--------------|----------|\n" >> tracking_body.md
+          
+          # Add each vulnerability to the summary table
+          jq -c '.[]' vulnerability-data/detailed-vulnerabilities.json | while IFS= read -r vuln; do
+            VULN_TITLE=$(echo "$vuln" | jq -r '.title // "Unknown Vulnerability"')
+            SEVERITY=$(echo "$vuln" | jq -r '.severity // "unknown"' | tr '[:lower:]' '[:upper:]')
+            PACKAGE_NAME=$(echo "$vuln" | jq -r '.packageName // "unknown"')
+            VERSION=$(echo "$vuln" | jq -r '.version // "unknown"')
+            FIXED_VERSION=$(echo "$vuln" | jq -r '.nearestFixedInVersion // "Not Available"')
+            
+            printf "| %s | %s@%s | %s | %s |\n" "$SEVERITY" "$PACKAGE_NAME" "$VERSION" "$VULN_TITLE" "$FIXED_VERSION" >> tracking_body.md
+          done
+          
+          printf "\n" >> tracking_body.md
           printf "\n" >> tracking_body.md
           
           printf "### 🎯 Action Items\n" >> tracking_body.md
@@ -485,7 +535,21 @@ jobs:
           printf "*This tracking issue was automatically created by the AI Security Scan workflow*\n" >> tracking_body.md
           printf "*For detailed vulnerability information, check the individual issues linked above*\n" >> tracking_body.md
           
-          # Create the tracking issue
+          # Check if tracking_body.md exists and has content
+          if [ ! -f "tracking_body.md" ]; then
+            echo "❌ tracking_body.md not found, creating minimal version"
+            printf "## 🚨 Security Vulnerability Dashboard\n\n" > tracking_body.md
+            printf "**Scan Date:** %s\n" "$(date)" >> tracking_body.md
+            printf "**Total Vulnerabilities Found:** %s\n\n" "$VULN_COUNT" >> tracking_body.md
+            printf "Please check the main security issue for details.\n" >> tracking_body.md
+          fi
+
+          # Print debug info
+          echo "Tracking body content preview:"
+          head -10 tracking_body.md
+          
+          # Create the tracking issue - don't initially assign anyone
+          echo "Creating tracking issue..."
           if TRACKING_URL=$(gh issue create \
             --title "$TRACKING_TITLE" \
             --body-file tracking_body.md \
@@ -495,69 +559,106 @@ jobs:
             echo "✅ Created tracking issue: $TRACKING_URL"
             TRACKING_NUMBER=$(echo "$TRACKING_URL" | grep -o '[0-9]*$')
             
-            # Assign tracking issue to GitHub Copilot SWE agent using GraphQL
-            echo "🤖 Attempting to assign tracking issue #$TRACKING_NUMBER to GitHub Copilot..."
+            # Direct assignment to GitHub Copilot using REST API (most reliable method)
+            echo "🤖 Directly assigning tracking issue #$TRACKING_NUMBER to GitHub Copilot..."
             
-            # Create GraphQL query to find Copilot SWE agent
-            FIND_COPILOT_QUERY='{
-              "query": "query($owner: String!, $repo: String!) { repository(owner: $owner, name: $repo) { suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 100) { nodes { login __typename ... on Bot { id } ... on User { id } } } } }",
-              "variables": {
-                "owner": "${{ github.repository_owner }}",
-                "repo": "${{ github.event.repository.name }}"
-              }
-            }'
+            # Try several methods to assign GitHub Copilot
+            echo "Attempting to assign GitHub Copilot to tracking issue using multiple methods..."
             
-            # Execute GraphQL query to find Copilot
-            COPILOT_RESPONSE=$(gh api graphql --input - <<< "$FIND_COPILOT_QUERY" 2>/dev/null || echo "")
-            
-            if [ -n "$COPILOT_RESPONSE" ]; then
-              # Extract Copilot actor ID
-              COPILOT_ID=$(echo "$COPILOT_RESPONSE" | jq -r '.data.repository.suggestedActors.nodes[] | select(.login == "copilot-swe-agent") | .id' 2>/dev/null || echo "")
+            # Method 1: Direct gh issue edit command
+            if gh issue edit "$TRACKING_NUMBER" --add-assignee "github-copilot[bot]" 2>/dev/null; then
+              echo "✅ Successfully assigned tracking issue #$TRACKING_NUMBER to Copilot using CLI method"
+            else
+              echo "⚠️ CLI assignment failed, trying REST API..."
               
-              if [ -n "$COPILOT_ID" ] && [ "$COPILOT_ID" != "null" ]; then
-                echo "✅ Found Copilot SWE agent with ID: $COPILOT_ID"
+              # Method 2: REST API with gh api
+              # Extract repository name from github.repository
+              REPO_NAME=$(echo "${{ github.repository }}" | cut -d'/' -f2)
+              if gh api --method POST "/repos/${{ github.repository_owner }}/$REPO_NAME/issues/$TRACKING_NUMBER/assignees" \
+                --input - <<< '{"assignees":["github-copilot[bot]"]}' 2>/dev/null; then
+                echo "✅ Successfully assigned tracking issue #$TRACKING_NUMBER to Copilot using gh api"
+              else
+                echo "⚠️ gh api assignment failed, trying curl..."
                 
-                # Get tracking issue GraphQL ID
-                GET_ISSUE_QUERY='{
-                  "query": "query($owner: String!, $repo: String!, $issueNumber: Int!) { repository(owner: $owner, name: $repo) { issue(number: $issueNumber) { id } } }",
-                  "variables": {
-                    "owner": "${{ github.repository_owner }}",
-                    "repo": "${{ github.event.repository.name }}",
-                    "issueNumber": '$TRACKING_NUMBER'
-                  }
-                }'
+                # Method 3: Direct curl request
+                if curl -s -X POST \
+                  -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                  -H "Accept: application/vnd.github.v3+json" \
+                  "https://api.github.com/repos/${{ github.repository_owner }}/$REPO_NAME/issues/$TRACKING_NUMBER/assignees" \
+                  -d '{"assignees":["github-copilot[bot]"]}' > /dev/null; then
+                  echo "✅ Successfully assigned tracking issue #$TRACKING_NUMBER to Copilot using curl"
+                else
+                  echo "⚠️ All assignment methods failed. Tracking issue created but not assigned to Copilot."
+                fi
+              fi
+            fi
+            
+            # No GraphQL method - it's less reliable than direct REST API or CLI calls
+              
+              # Execute GraphQL query to find Copilot
+              COPILOT_RESPONSE=$(gh api graphql --input - <<< "$FIND_COPILOT_QUERY" 2>/dev/null || echo "")
+              
+              if [ -n "$COPILOT_RESPONSE" ]; then
+                # Extract Copilot actor ID - try both copilot-swe-agent and github-copilot[bot]
+                COPILOT_ID=$(echo "$COPILOT_RESPONSE" | jq -r '.data.repository.suggestedActors.nodes[] | select(.login == "copilot-swe-agent" or .login == "github-copilot[bot]") | .id' 2>/dev/null | head -1 || echo "")
                 
-                ISSUE_RESPONSE=$(gh api graphql --input - <<< "$GET_ISSUE_QUERY" 2>/dev/null || echo "")
-                ISSUE_ID=$(echo "$ISSUE_RESPONSE" | jq -r '.data.repository.issue.id' 2>/dev/null || echo "")
-                
-                if [ -n "$ISSUE_ID" ] && [ "$ISSUE_ID" != "null" ]; then
-                  # Assign tracking issue to Copilot using GraphQL mutation
-                  ASSIGN_MUTATION='{
-                    "query": "mutation($issueId: ID!, $actorId: ID!) { replaceActorsForAssignable(input: {assignableId: $issueId, actorIds: [$actorId]}) { assignable { ... on Issue { id title assignees(first: 10) { nodes { login } } } } } }",
+                if [ -n "$COPILOT_ID" ] && [ "$COPILOT_ID" != "null" ]; then
+                  echo "✅ Found Copilot agent with ID: $COPILOT_ID"
+                  
+                  # Get tracking issue GraphQL ID
+                  GET_ISSUE_QUERY='{
+                    "query": "query($owner: String!, $repo: String!, $issueNumber: Int!) { repository(owner: $owner, name: $repo) { issue(number: $issueNumber) { id } } }",
                     "variables": {
-                      "issueId": "'$ISSUE_ID'",
-                      "actorId": "'$COPILOT_ID'"
+                      "owner": "${{ github.repository_owner }}",
+                      "repo": "${{ github.event.repository.name }}",
+                      "issueNumber": '$TRACKING_NUMBER'
                     }
                   }'
                   
-                  ASSIGN_RESPONSE=$(gh api graphql --input - <<< "$ASSIGN_MUTATION" 2>/dev/null || echo "")
+                  ISSUE_RESPONSE=$(gh api graphql --input - <<< "$GET_ISSUE_QUERY" 2>/dev/null || echo "")
+                  ISSUE_ID=$(echo "$ISSUE_RESPONSE" | jq -r '.data.repository.issue.id' 2>/dev/null || echo "")
                   
-                  if [ -n "$ASSIGN_RESPONSE" ]; then
-                    ASSIGNEES=$(echo "$ASSIGN_RESPONSE" | jq -r '.data.replaceActorsForAssignable.assignable.assignees.nodes[].login' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
-                    echo "✅ Successfully assigned tracking issue #$TRACKING_NUMBER to Copilot"
-                    echo "Assignees: $ASSIGNEES"
+                  if [ -n "$ISSUE_ID" ] && [ "$ISSUE_ID" != "null" ]; then
+                    # Assign tracking issue to Copilot using GraphQL mutation
+                    ASSIGN_MUTATION='{
+                      "query": "mutation($issueId: ID!, $actorId: ID!) { addAssigneesToAssignable(input: {assignableId: $issueId, assigneeIds: [$actorId]}) { assignable { ... on Issue { id title assignees(first: 10) { nodes { login } } } } } }",
+                      "variables": {
+                        "issueId": "'$ISSUE_ID'",
+                        "actorId": "'$COPILOT_ID'"
+                      }
+                    }'
+                    
+                    ASSIGN_RESPONSE=$(gh api graphql --input - <<< "$ASSIGN_MUTATION" 2>/dev/null || echo "")
+                    
+                    if [ -n "$ASSIGN_RESPONSE" ]; then
+                      ASSIGNEES=$(echo "$ASSIGN_RESPONSE" | jq -r '.data.addAssigneesToAssignable.assignable.assignees.nodes[].login' 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
+                      echo "✅ Successfully assigned tracking issue #$TRACKING_NUMBER to Copilot"
+                      echo "Assignees: $ASSIGNEES"
+                    else
+                      echo "⚠️ Failed to assign tracking issue to Copilot (GraphQL mutation failed)"
+                      # Try REST API as a final attempt
+                      gh api --method POST repos/:owner/:repo/issues/$TRACKING_NUMBER/assignees -f assignees='["github-copilot[bot]"]' 2>/dev/null && \
+                        echo "✅ Successfully assigned tracking issue using REST API" || echo "⚠️ REST API assignment also failed"
+                    fi
                   else
-                    echo "⚠️ Failed to assign tracking issue to Copilot (mutation failed)"
+                    echo "⚠️ Failed to get tracking issue GraphQL ID"
                   fi
                 else
-                  echo "⚠️ Failed to get tracking issue GraphQL ID"
+                  echo "⚠️ Copilot agent not found in repository suggested actors"
+                  echo "Trying direct REST API call to assign GitHub Copilot..."
+                  
+                  # Try REST API as a final attempt
+                  gh api --method POST repos/:owner/:repo/issues/$TRACKING_NUMBER/assignees -f assignees='["github-copilot[bot]"]' 2>/dev/null && \
+                    echo "✅ Successfully assigned tracking issue using REST API" || echo "⚠️ REST API assignment also failed"
                 fi
               else
-                echo "⚠️ Copilot SWE agent not found in repository suggested actors"
-                echo "Note: GitHub Copilot may not be enabled for this repository"
+                echo "⚠️ Failed to query repository suggested actors"
+                echo "Trying direct REST API call to assign GitHub Copilot..."
+                
+                # Try REST API as a final attempt
+                gh api --method POST repos/:owner/:repo/issues/$TRACKING_NUMBER/assignees -f assignees='["github-copilot[bot]"]' 2>/dev/null && \
+                  echo "✅ Successfully assigned tracking issue using REST API" || echo "⚠️ REST API assignment also failed"
               fi
-            else
-              echo "⚠️ Failed to query repository suggested actors"
             fi
             
             # Pin the tracking issue if possible
