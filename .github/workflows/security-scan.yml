@@ -363,106 +363,100 @@ jobs:
           
           echo "### Vulnerability Analysis Results" >> copilot-analysis.md
           
-          # GitHub Copilot CLI cannot work in GitHub Actions due to OAuth requirements
-          # So we implement intelligent rule-based analysis instead
-          echo "**Analysis Method:** Intelligent Rule-Based Security Analysis" >> copilot-analysis.md
-          echo "" >> copilot-analysis.md
-          echo "*Note: GitHub Copilot CLI requires interactive OAuth authentication which is not available in GitHub Actions.*" >> copilot-analysis.md
-          echo "*Using advanced rule-based analysis with security best practices.*" >> copilot-analysis.md
-          echo "" >> copilot-analysis.md
-          
-          # Create intelligent vulnerability analysis based on Snyk data
-          echo "🔍 Performing intelligent vulnerability analysis..."
-          
-          # Read vulnerability data and create smart recommendations
-          VULN_COUNT=$(jq -r 'length' vulnerability-data/detailed-vulnerabilities.json 2>/dev/null || echo "0")
-          echo "Found $VULN_COUNT high/critical vulnerabilities to analyze"
-          
-          # Generate intelligent fix suggestions based on vulnerability patterns
-          cat > copilot-suggestions.txt << 'EOF'
-          # 🤖 AI-Powered Security Fix Recommendations
-          
-          ## Analysis Summary
-          Based on the security vulnerability scan, here are intelligent fix recommendations:
-          
-          ### 1. Dependency Updates (Recommended)
-          # Update all packages to latest secure versions
-          npm audit fix
-          
-          # Force update for critical vulnerabilities
-          npm audit fix --force
-          
-          ### 2. Specific Package Updates
-          # Check for specific package updates needed
-          npm outdated
-          
-          ### 3. Alternative Security Tools
-          # Run additional security checks
-          npm install --save-dev eslint-plugin-security
-          
-          ### 4. Package Lock Analysis
-          # Ensure package-lock.json is up to date
-          npm ci
-          
-          ### 5. Security Best Practices
-          # Add security headers and validation
-          # Review code for common security patterns
-          # Update Node.js to latest LTS if possible
-          
-          ## Implementation Notes
-          - Test thoroughly after updates
-          - Check for breaking changes
-          - Consider gradual updates for large projects
-          - Monitor security advisories regularly
-          EOF
-          
-          echo "✅ Intelligent analysis completed" >> copilot-analysis.md
-          echo "## AI-Powered Fix Recommendations:" >> copilot-analysis.md
-          echo '```bash' >> copilot-analysis.md
-          cat copilot-suggestions.txt >> copilot-analysis.md
-          echo '```' >> copilot-analysis.md
-          
-          # Continue with the rest of the analysis
-          echo "## Next Steps" >> copilot-analysis.md
-          
-          # Extract actionable commands from vulnerability data
-          echo "#!/bin/bash" > copilot-fixes.sh
-          echo "# AI-Inspired Security Fixes" >> copilot-fixes.sh
-          echo "# Generated on: $(date)" >> copilot-fixes.sh
-          echo "" >> copilot-fixes.sh
-          
-          # Parse vulnerabilities and generate fix commands
-          echo "# Backup original package files" >> copilot-fixes.sh
-          echo "cp package.json package.json.backup" >> copilot-fixes.sh
-          echo "cp package-lock.json package-lock.json.backup 2>/dev/null || true" >> copilot-fixes.sh
-          echo "" >> copilot-fixes.sh
-          
-          # Generate specific npm update commands for each vulnerability (fixed jq syntax)
-          echo "# Vulnerability-specific fixes:" >> copilot-fixes.sh
-          jq -r '.[] | select(.isUpgradable == true) | 
-            "echo \"Fixing " + (.title // "Unknown") + " in " + (.packageName // "unknown") + "...\"",
-            if (.packageName | test("babel|webpack|@types|eslint|jest|test")) then
-              "npm install " + (.packageName // "unknown") + "@" + (.nearestFixedInVersion // "latest") + " --save-dev"
+          if [ "$COPILOT_AVAILABLE" = "true" ]; then
+            echo "🤖 Using actual GitHub Copilot CLI for analysis..."
+            echo "**Analysis Method:** GitHub Copilot CLI (AI-Powered)" >> copilot-analysis.md
+            echo "" >> copilot-analysis.md
+            
+            # Create a detailed prompt for Copilot with vulnerability context
+            VULN_COUNT=$(jq -r 'length' vulnerability-data/detailed-vulnerabilities.json 2>/dev/null || echo "0")
+            
+            # Read vulnerability context for Copilot prompt
+            VULN_CONTEXT=""
+            if [ -f "vulnerability-data/vulnerability-context.md" ]; then
+              VULN_CONTEXT=$(head -n 50 vulnerability-data/vulnerability-context.md | tr '\n' ' ')
+            fi
+            
+            # Create comprehensive prompt for Copilot
+            PROMPT="Based on this security scan showing $VULN_COUNT vulnerabilities: $VULN_CONTEXT. Generate npm commands to: 1. Update vulnerable packages to secure versions 2. Fix high/critical severity issues first 3. Maintain compatibility where possible 4. Provide alternative solutions for unfixable packages. Focus on actionable npm/yarn commands and code changes."
+            
+            echo "🤖 Generating AI-powered fixes with GitHub Copilot..." >> copilot-analysis.md
+            echo "Prompt: Fix $VULN_COUNT security vulnerabilities found in dependency scan" >> copilot-analysis.md
+            echo "" >> copilot-analysis.md
+            
+            # Try using Copilot CLI with the vulnerability context
+            if timeout 120 gh copilot suggest "$PROMPT" --target shell > copilot-suggestions.txt 2>&1; then
+              echo "✅ GitHub Copilot CLI analysis successful" >> copilot-analysis.md
+              echo "## 🤖 AI-Generated Fix Suggestions:" >> copilot-analysis.md
+              echo '```bash' >> copilot-analysis.md
+              cat copilot-suggestions.txt >> copilot-analysis.md
+              echo '```' >> copilot-analysis.md
+              
+              # Also try code-specific suggestions if there are code vulnerabilities
+              if timeout 60 gh copilot suggest "Review this package.json for security improvements and suggest safer alternatives" --target shell > copilot-code-suggestions.txt 2>&1; then
+                echo "" >> copilot-analysis.md
+                echo "## 🔒 Additional Security Recommendations:" >> copilot-analysis.md
+                echo '```bash' >> copilot-analysis.md
+                cat copilot-code-suggestions.txt >> copilot-analysis.md
+                echo '```' >> copilot-analysis.md
+              fi
+              
+              COPILOT_SUCCESS=true
+              
             else
-              "npm install " + (.packageName // "unknown") + "@" + (.nearestFixedInVersion // "latest") + " --save"
-            end' \
-            vulnerability-data/detailed-vulnerabilities.json >> copilot-fixes.sh 2>/dev/null || echo "# No upgradable vulnerabilities found" >> copilot-fixes.sh
+              echo "❌ Copilot CLI analysis failed, falling back to test mode" >> copilot-analysis.md
+              echo "Error output:" >> copilot-analysis.md
+              echo '```' >> copilot-analysis.md
+              cat copilot-suggestions.txt 2>/dev/null || echo "No error output captured" >> copilot-analysis.md
+              echo '```' >> copilot-analysis.md
+              
+              COPILOT_SUCCESS=false
+            fi
+            
+          else
+            echo "🧠 GitHub Copilot CLI not available, using test mode..."
+            echo "**Analysis Method:** Test Mode (README Update)" >> copilot-analysis.md
+            echo "" >> copilot-analysis.md
+            echo "*Note: GitHub Copilot CLI not available - running in test mode with README update.*" >> copilot-analysis.md
+            echo "" >> copilot-analysis.md
+            
+            COPILOT_SUCCESS=false
+          fi
           
-          # Add common missing dev dependencies for Babel/Webpack projects
-          echo "" >> copilot-fixes.sh
-          echo "# Install commonly missing dev dependencies" >> copilot-fixes.sh
-          echo "echo \"Installing missing dev dependencies...\"" >> copilot-fixes.sh
-          echo "npm install @babel/plugin-transform-runtime @babel/runtime --save-dev --silent 2>/dev/null || true" >> copilot-fixes.sh
+          # If Copilot failed or not available, create test suggestions
+          if [ "$COPILOT_SUCCESS" != "true" ]; then
+            echo "🧪 Creating test mode analysis..."
+            echo "# Test Mode - README Update Instead of NPM Fixes" > copilot-suggestions.txt
+            echo "## Test Mode Analysis" >> copilot-suggestions.txt
+            echo "This is a test run focusing on README update instead of npm vulnerability fixes." >> copilot-suggestions.txt
+            echo "" >> copilot-suggestions.txt
+            echo "### What will be updated:" >> copilot-suggestions.txt
+            echo "- README.md file with security scan information" >> copilot-suggestions.txt
+            echo "- Test commit and branch creation" >> copilot-suggestions.txt
+            echo "- Pull request creation logic testing" >> copilot-suggestions.txt
+            echo "" >> copilot-suggestions.txt
+            echo "### Test objectives:" >> copilot-suggestions.txt
+            echo "- Verify workflow can detect vulnerabilities" >> copilot-suggestions.txt
+            echo "- Test branch and commit creation" >> copilot-suggestions.txt
+            echo "- Validate PR creation process" >> copilot-suggestions.txt
+            echo "- Skip actual npm dependency updates" >> copilot-suggestions.txt
+            
+            echo "✅ Test mode analysis completed" >> copilot-analysis.md
+            echo "## Test Mode Recommendations:" >> copilot-analysis.md
+            echo '```bash' >> copilot-analysis.md
+            cat copilot-suggestions.txt >> copilot-analysis.md
+            echo '```' >> copilot-analysis.md
+          fi
+            
+            echo "✅ Test mode analysis completed" >> copilot-analysis.md
+            echo "## Test Mode Recommendations:" >> copilot-analysis.md
+            echo '```bash' >> copilot-analysis.md
+            echo '```' >> copilot-analysis.md
+          fi
           
-          # Add additional security improvements
-          echo "" >> copilot-fixes.sh
-          echo "# Run npm audit fix for additional security improvements" >> copilot-fixes.sh
-          echo "npm audit fix --force || true" >> copilot-fixes.sh
-          echo "" >> copilot-fixes.sh
-          echo "# Update package-lock.json" >> copilot-fixes.sh
-          echo "npm install --package-lock-only" >> copilot-fixes.sh
-          
-          chmod +x copilot-fixes.sh
+          # Continue with the rest of the analysis - skip npm fixes generation since not needed
+          echo "## Next Steps" >> copilot-analysis.md
+          echo "Analysis complete. Proceeding with test mode (README update) instead of npm fixes." >> copilot-analysis.md
 
       # Step 6: Apply test changes (README update instead of npm fixes)
       - name: Apply test changes for PR logic
