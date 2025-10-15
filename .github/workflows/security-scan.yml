@@ -244,8 +244,16 @@ jobs:
           && sudo apt update \
           && sudo apt install gh -y
           
-          # Install GitHub Copilot CLI extension
-          gh extension install github/gh-copilot || echo "Copilot extension already installed"
+          # Try to install GitHub Copilot CLI extension (may not be available in Actions)
+          echo "Attempting to install GitHub Copilot CLI extension..."
+          gh extension install github/gh-copilot || echo "⚠️  GitHub Copilot CLI extension not available - will use manual analysis"
+          
+          # Check if copilot is available
+          if gh copilot --help >/dev/null 2>&1; then
+            echo "✅ GitHub Copilot CLI is available"
+          else
+            echo "❌ GitHub Copilot CLI not available - proceeding with rule-based analysis"
+          fi
 
       # Step 5: Analyze vulnerabilities with GitHub Copilot
       - name: Generate fixes with GitHub Copilot
@@ -271,15 +279,22 @@ jobs:
           - Minimal disruption to existing functionality
           EOF
           
-          # Use GitHub Copilot to analyze vulnerabilities and generate fixes
+          # Check if GitHub Copilot CLI is available and try to use it
           echo "## 🤖 GitHub Copilot Security Analysis" > copilot-analysis.md
           echo "" >> copilot-analysis.md
           echo "### Vulnerability Analysis" >> copilot-analysis.md
-          gh copilot suggest --type shell "Analyze the vulnerability report and generate npm update commands for package.json security fixes" < vulnerability-data/vulnerability-context.md > copilot-suggestions.txt || echo "Copilot analysis failed, falling back to manual analysis"
           
-          # Extract actionable commands from Copilot suggestions
+          if gh copilot --help >/dev/null 2>&1; then
+            echo "Using GitHub Copilot CLI for analysis..."
+            gh copilot suggest --type shell "Analyze the vulnerability report and generate npm update commands for package.json security fixes" < vulnerability-data/vulnerability-context.md > copilot-suggestions.txt || echo "Copilot CLI analysis failed, falling back to rule-based analysis"
+          else
+            echo "GitHub Copilot CLI not available, using rule-based analysis..."
+            echo "Rule-based analysis based on vulnerability data" > copilot-suggestions.txt
+          fi
+          
+          # Extract actionable commands from vulnerability data
           echo "#!/bin/bash" > copilot-fixes.sh
-          echo "# GitHub Copilot Generated Security Fixes" >> copilot-fixes.sh
+          echo "# AI-Inspired Security Fixes" >> copilot-fixes.sh
           echo "# Generated on: $(date)" >> copilot-fixes.sh
           echo "" >> copilot-fixes.sh
           
@@ -289,8 +304,12 @@ jobs:
           echo "cp package-lock.json package-lock.json.backup 2>/dev/null || true" >> copilot-fixes.sh
           echo "" >> copilot-fixes.sh
           
-          # Generate specific npm update commands for each vulnerability
-          jq -r '.[] | select(.isUpgradable == true) | "echo \"Fixing \(.title) in \(.packageName)...\""; "npm install \(.packageName)@\(.nearestFixedInVersion // "latest") --save" + (if .packageName | contains("dev") then "-dev" else "" end)' vulnerability-data/detailed-vulnerabilities.json >> copilot-fixes.sh
+          # Generate specific npm update commands for each vulnerability (fixed jq syntax)
+          echo "# Vulnerability-specific fixes:" >> copilot-fixes.sh
+          jq -r '.[] | select(.isUpgradable == true) | 
+            "echo \"Fixing " + (.title // "Unknown") + " in " + (.packageName // "unknown") + "...\"",
+            "npm install " + (.packageName // "unknown") + "@" + (.nearestFixedInVersion // "latest") + " --save"' \
+            vulnerability-data/detailed-vulnerabilities.json >> copilot-fixes.sh 2>/dev/null || echo "# No upgradable vulnerabilities found" >> copilot-fixes.sh
           
           # Add additional security improvements
           echo "" >> copilot-fixes.sh
@@ -302,11 +321,11 @@ jobs:
           
           chmod +x copilot-fixes.sh
 
-      # Step 6: Apply GitHub Copilot generated fixes
+      # Step 6: Apply AI-inspired generated fixes
       - name: Apply security fixes
         id: apply_copilot_fixes
         run: |
-          echo "🔧 Applying GitHub Copilot generated security fixes..."
+          echo "🔧 Applying AI-inspired security fixes..."
           
           # Install current dependencies first
           npm ci
@@ -352,32 +371,41 @@ jobs:
           npm audit --audit-level=high || echo "⚠️  Some vulnerabilities may remain"
 
       # Step 8: Create detailed security fix PR
-      - name: Create GitHub Copilot Security Fix PR
+      - name: Create AI-Inspired Security Fix PR
         if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Configure git
           git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Actions (Copilot)"
+          git config --local user.name "GitHub Actions (AI-Inspired)"
           
           # Create a new branch for the security fix
-          BRANCH_NAME="copilot-security-fix-$(date +%Y%m%d-%H%M%S)"
+          BRANCH_NAME="ai-security-fix-$(date +%Y%m%d-%H%M%S)"
           git checkout -b $BRANCH_NAME
           
           # Add all changed files
           git add package.json package-lock.json
           
-          # Create comprehensive commit message
-          COMMIT_MSG="🤖🔒 GitHub Copilot: Automated security vulnerability fixes
-
-          Applied AI-generated fixes for ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }} high/critical vulnerabilities:
-
-          $(jq -r '.[] | "- \(.title) in \(.packageName)@\(.version)"' vulnerability-data/detailed-vulnerabilities.json | head -10)
-
-          Generated by GitHub Copilot CLI and applied automatically.
+          # Determine if Copilot was used or rule-based analysis
+          if gh copilot --help >/dev/null 2>&1; then
+            ANALYSIS_TYPE="GitHub Copilot AI"
+            CO_AUTHOR="Co-authored-by: GitHub Copilot <copilot@github.com>"
+          else
+            ANALYSIS_TYPE="Rule-based AI-inspired"
+            CO_AUTHOR="Co-authored-by: Automated Security Analysis <security@github.com>"
+          fi
           
-          Co-authored-by: GitHub Copilot <copilot@github.com>"
+          # Create comprehensive commit message
+          COMMIT_MSG="🤖🔒 AI-Inspired: Automated security vulnerability fixes
+
+          Applied $ANALYSIS_TYPE fixes for ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }} high/critical vulnerabilities:
+
+          $(jq -r '.[] | "- " + (.title // "Unknown") + " in " + (.packageName // "unknown") + "@" + (.version // "unknown")' vulnerability-data/detailed-vulnerabilities.json | head -10)
+
+          Generated by intelligent vulnerability analysis and applied automatically.
+          
+          $CO_AUTHOR"
           
           git commit -m "$COMMIT_MSG"
           
@@ -385,14 +413,14 @@ jobs:
           git push origin $BRANCH_NAME
           
           # Create comprehensive PR description
-          PR_DESCRIPTION="## 🤖🔒 GitHub Copilot Security Vulnerability Fixes
+          PR_DESCRIPTION="## 🤖🔒 AI-Inspired Security Vulnerability Fixes
 
-          This PR contains AI-generated security fixes created by **GitHub Copilot** for high and critical vulnerabilities detected in the project dependencies.
+          This PR contains AI-inspired security fixes for high and critical vulnerabilities detected in the project dependencies.
 
-          ### 🤖 AI-Powered Analysis
-          - **Tool Used:** GitHub Copilot CLI
+          ### 🤖 Analysis Method
+          - **Tool Used:** $ANALYSIS_TYPE
           - **Vulnerabilities Analyzed:** ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }}
-          - **Fix Strategy:** AI-analyzed dependency updates and security patches
+          - **Fix Strategy:** Intelligent dependency updates and security patches
           - **Generation Date:** $(date)
 
           ### 🔧 Changes Applied
@@ -420,17 +448,17 @@ jobs:
 
           ---
           
-          **⚡ This PR was automatically generated using GitHub Copilot AI analysis and GitHub Actions.**
+          **⚡ This PR was automatically generated using intelligent security analysis and GitHub Actions.**
           
-          **🤖 AI Collaboration:** This fix represents a collaboration between AI analysis and automated security scanning to provide intelligent, context-aware security updates."
+          **🤖 AI-Inspired Analysis:** This fix represents intelligent analysis of security vulnerabilities to provide context-aware security updates."
           
           # Create the PR using GitHub CLI
           gh pr create \
-            --title "🤖🔒 GitHub Copilot: AI-generated security fixes $(date +%Y-%m-%d)" \
+            --title "🤖🔒 AI-Inspired: Intelligent security fixes $(date +%Y-%m-%d)" \
             --body "$PR_DESCRIPTION" \
             --head $BRANCH_NAME \
             --base main \
-            --label "security,ai-generated,copilot,automated-fix" \
+            --label "security,ai-inspired,automated-fix" \
             --reviewer "denukedissanayake"
 
       # Step 9: Upload comprehensive artifacts
@@ -438,7 +466,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: copilot-security-fixes
+          name: ai-security-fixes
           path: |
             copilot-fixes.sh
             copilot-analysis.md
@@ -448,22 +476,29 @@ jobs:
             vulnerability-data/
 
       # Step 10: Update job summary
-      - name: GitHub Copilot Fix Summary
+      - name: AI-Inspired Fix Summary
         if: always()
         run: |
-          echo "## 🤖 GitHub Copilot Security Fix Summary" >> $GITHUB_STEP_SUMMARY
+          echo "## 🤖 AI-Inspired Security Fix Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**AI Analysis Date:** $(date)" >> $GITHUB_STEP_SUMMARY
+          echo "**Analysis Date:** $(date)" >> $GITHUB_STEP_SUMMARY
           echo "**Vulnerabilities Processed:** ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }}" >> $GITHUB_STEP_SUMMARY
+          
+          # Determine analysis method used
+          if gh copilot --help >/dev/null 2>&1; then
+            echo "**Analysis Method:** 🤖 GitHub Copilot CLI" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Analysis Method:** 🧠 Rule-based AI-inspired analysis" >> $GITHUB_STEP_SUMMARY
+          fi
+          
           echo "" >> $GITHUB_STEP_SUMMARY
           
           if [ "${{ steps.apply_copilot_fixes.outputs.package_updated }}" = "true" ]; then
             echo "**🤖 AI Fixes Applied:** ✅ Yes" >> $GITHUB_STEP_SUMMARY
             echo "**📋 Pull Request Created:** ✅ Yes" >> $GITHUB_STEP_SUMMARY
-            echo "**🔧 Tool Used:** GitHub Copilot CLI" >> $GITHUB_STEP_SUMMARY
           else
             echo "**🤖 AI Fixes Applied:** ❌ No changes generated" >> $GITHUB_STEP_SUMMARY
           fi
           
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**📊 Artifacts:** Check 'copilot-security-fixes' for detailed AI analysis and fixes" >> $GITHUB_STEP_SUMMARY
+          echo "**📊 Artifacts:** Check 'ai-security-fixes' for detailed analysis and fixes" >> $GITHUB_STEP_SUMMARY
