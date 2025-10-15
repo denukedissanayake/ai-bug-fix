@@ -1,17 +1,12 @@
 name: Fix security vulnerabilities with AI
 
 on:
-  # Trigger on cron schedule (runs daily at 2 AM UTC)
   schedule:
     - cron: '0 2 * * *'
   workflow_dispatch:
-  
-  # Trigger on pull requests
   pull_request:
     branches:
       - main
-  
-  # Trigger when code is merged to main
   push:
     branches:
       - main
@@ -36,41 +31,32 @@ jobs:
       has-vulnerabilities: ${{ steps.extract_vulns.outputs.fixable_count > 0 }}
     
     steps:
-      # Step 1: Checkout the repository code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Set up Node.js (adjust version as needed for your project)
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
 
-      # Step 3: Install dependencies
       - name: Install dependencies
         run: npm ci
 
-      # Step 4: Install Snyk CLI
       - name: Install Snyk CLI
         run: npm install -g snyk
 
-      # Step 5: Authenticate with Snyk
       - name: Authenticate Snyk
         run: snyk auth ${{ secrets.SNYK_TOKEN }}
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
-      # Step 6: Run Snyk vulnerability scan
       - name: Run Snyk vulnerability scan
         run: snyk test --json --severity-threshold=high > snyk-results.json || true
 
-      # Step 7: Filter and display high-risk vulnerabilities
       - name: Extract high-risk vulnerabilities
         run: |
-          echo "=== HIGH RISK VULNERABILITIES ==="
           snyk test --severity-threshold=high --json | jq '.vulnerabilities[] | select(.severity == "high" or .severity == "critical") | {title: .title, severity: .severity, package: .packageName, version: .version, identifiers: .identifiers}'
 
-      # Step 8: Generate summary report of high-risk issues
       - name: Generate vulnerability summary
         run: |
           echo "## Snyk Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
@@ -84,26 +70,18 @@ jobs:
           echo "**Critical Vulnerabilities:** $CRITICAL_COUNT" >> $GITHUB_STEP_SUMMARY
           echo "**High Vulnerabilities:** $HIGH_COUNT" >> $GITHUB_STEP_SUMMARY
 
-      # Step 9: Parse and extract vulnerabilities for GitHub Copilot processing
       - name: Extract fixable vulnerabilities
         id: extract_vulns
         run: |
-          # Create a detailed vulnerability report
-          echo "Creating detailed vulnerability report..."
+          echo "INFO: Starting vulnerability data extraction and processing"
           snyk test --json > full-scan-results.json || true
           
-          # Check if we have scan results
           if [ ! -f "full-scan-results.json" ] || [ ! -s "full-scan-results.json" ]; then
-            echo "No scan results found, creating empty results"
+            echo "WARNING: No scan results found, creating empty vulnerability dataset"
             echo '{"vulnerabilities": []}' > full-scan-results.json
           fi
           
-          # Debug: Show structure of scan results
-          echo "Scan results structure:"
-          jq -r 'keys' full-scan-results.json 2>/dev/null || echo "Invalid JSON in scan results"
-          
-          # Extract high and critical vulnerabilities with detailed context
-          echo "Extracting vulnerabilities..."
+          echo "INFO: Filtering high and critical severity vulnerabilities"
           jq -c '.vulnerabilities[]? // [] | select(.severity == "high" or .severity == "critical") | {
             id: (.id // "unknown"),
             title: (.title // "Unknown Vulnerability"),
@@ -120,19 +98,16 @@ jobs:
             from: (.from // [])
           }' full-scan-results.json 2>/dev/null | jq -s '.' > detailed-vulnerabilities.json || echo "[]" > detailed-vulnerabilities.json
           
-          # Count vulnerabilities
           VULN_COUNT=$(jq 'length' detailed-vulnerabilities.json 2>/dev/null | head -n 1 | tr -d '\n\r' || echo "0")
-          # Debug: show raw count value
-          echo "Raw VULN_COUNT value: '$VULN_COUNT'"
-          # Ensure it's a valid number
+          
           if ! [[ "$VULN_COUNT" =~ ^[0-9]+$ ]]; then
-            echo "Invalid vulnerability count: '$VULN_COUNT', setting to 0"
+            echo "WARNING: Invalid vulnerability count detected, setting to 0"
             VULN_COUNT=0
           fi
           echo "fixable_count=$VULN_COUNT" >> $GITHUB_OUTPUT
-          echo "Found $VULN_COUNT high/critical vulnerabilities"
+          echo "INFO: Identified $VULN_COUNT high/critical vulnerabilities requiring attention"
           
-          # Create context file for GitHub Copilot
+          echo "INFO: Generating comprehensive vulnerability analysis report"
           echo "# Security Vulnerability Analysis Report" > vulnerability-context.md
           echo "" >> vulnerability-context.md
           echo "**Project:** ${{ github.repository }}" >> vulnerability-context.md
@@ -140,12 +115,11 @@ jobs:
           echo "**Total High/Critical Vulnerabilities:** $VULN_COUNT" >> vulnerability-context.md
           echo "" >> vulnerability-context.md
           
-          # Generate detailed vulnerability descriptions for Copilot
           echo "## Detected Vulnerabilities" >> vulnerability-context.md
           echo "" >> vulnerability-context.md
           
           if [ "$VULN_COUNT" -gt 0 ] 2>/dev/null; then
-            echo "Processing $VULN_COUNT vulnerabilities..."
+            echo "INFO: Processing detailed vulnerability information for $VULN_COUNT vulnerabilities"
             jq -r '.[] | "### \(.title // "Unknown Vulnerability") (\(.severity // "unknown" | ascii_upcase))
             
             **Package:** \(.packageName // "unknown")@\(.version // "unknown")
@@ -171,15 +145,15 @@ jobs:
             end)
             
             ---
-            "' detailed-vulnerabilities.json >> vulnerability-context.md 2>/dev/null || echo "Error processing vulnerability details" >> vulnerability-context.md
+            "' detailed-vulnerabilities.json >> vulnerability-context.md 2>/dev/null || echo "ERROR: Failed to process vulnerability details" >> vulnerability-context.md
           else
-            echo "No high or critical vulnerabilities detected."
+            echo "INFO: No high or critical vulnerabilities detected in this scan"
             echo "No high or critical vulnerabilities detected." >> vulnerability-context.md
             echo "" >> vulnerability-context.md
-            echo "✅ This project appears to be secure from high and critical vulnerabilities!" >> vulnerability-context.md
+            echo "STATUS: This project appears to be secure from high and critical vulnerabilities." >> vulnerability-context.md
           fi
+          echo "SUCCESS: Vulnerability analysis and report generation completed"
 
-      # Step 10: Upload vulnerability data for fix job
       - name: Upload vulnerability artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -190,28 +164,6 @@ jobs:
             detailed-vulnerabilities.json
             vulnerability-context.md
             snyk-results.json
-
-      # Debug step: Show what we found
-      - name: Debug vulnerability detection
-        if: always()
-        run: |
-          echo "=== DEBUG INFORMATION ==="
-          echo "Vulnerability files created:"
-          ls -la *.json *.md 2>/dev/null || echo "No files found"
-          echo ""
-          echo "Detailed vulnerabilities content:"
-          if [ -f detailed-vulnerabilities.json ]; then
-            cat detailed-vulnerabilities.json | head -20
-          else
-            echo "detailed-vulnerabilities.json not found"
-          fi
-          echo ""
-          echo "Vulnerability context preview:"
-          if [ -f vulnerability-context.md ]; then
-            head -20 vulnerability-context.md
-          else
-            echo "vulnerability-context.md not found"
-          fi
 
   create-vulnerability-issue:
     runs-on: ubuntu-latest
@@ -224,18 +176,15 @@ jobs:
       pull-requests: write
     
     steps:
-      # Step 1: Checkout the repository code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Download vulnerability data
       - name: Download vulnerability data
         uses: actions/download-artifact@v4
         with:
           name: vulnerability-data
           path: vulnerability-data/
 
-      # Step 4: Create a single GitHub issue for all vulnerabilities
       - name: Create consolidated vulnerability issue
         uses: actions/github-script@v7
         with:
@@ -243,9 +192,8 @@ jobs:
           script: |
             const fs = require('fs');
             
-            console.log('🐛 Creating a single GitHub issue for all discovered vulnerabilities...');
+            console.log('INFO: Initializing vulnerability issue creation process');
             
-            // Create labels if they don't exist
             const labelsToCreate = [
               { name: 'security', description: 'Security vulnerability', color: 'd73a4a' },
               { name: 'vulnerability', description: 'Security vulnerability found by scan', color: 'b60205' },
@@ -256,6 +204,7 @@ jobs:
               { name: 'scheduled', description: 'Automatically scheduled task', color: '7057ff' }
             ];
             
+            console.log('INFO: Creating required labels for security issue tracking');
             for (const label of labelsToCreate) {
               try {
                 await github.rest.issues.createLabel({
@@ -263,43 +212,42 @@ jobs:
                   repo: context.repo.repo,
                   ...label
                 });
-                console.log(`Created label: ${label.name}`);
+                console.log(`INFO: Successfully created label: ${label.name}`);
               } catch (error) {
-                if (error.status === 422) {
-                  console.log(`Label ${label.name} already exists`);
+                if (error.status !== 422) {
+                  console.log(`WARNING: Could not create label ${label.name}: ${error.message}`);
                 } else {
-                  console.log(`Warning: Could not create label ${label.name}`);
+                  console.log(`INFO: Label ${label.name} already exists`);
                 }
               }
             }
             
-            // Check if vulnerabilities file exists and has content
+            console.log('INFO: Checking for vulnerability data file');
             if (!fs.existsSync('vulnerability-data/detailed-vulnerabilities.json')) {
-              console.log('❌ No vulnerability data file found');
+              console.log('WARNING: No vulnerability data file found, skipping issue creation');
               return;
             }
             
-            // Read and parse vulnerabilities
+            console.log('INFO: Reading vulnerability data from scan results');
             const vulnData = JSON.parse(fs.readFileSync('vulnerability-data/detailed-vulnerabilities.json', 'utf8'));
             const vulnCount = vulnData.length;
             
-            console.log(`Found ${vulnCount} vulnerabilities to process`);
-            
+            console.log(`INFO: Found ${vulnCount} vulnerabilities to process`);
             if (vulnCount === 0) {
-              console.log('No vulnerabilities to create issues for');
+              console.log('INFO: No vulnerabilities detected, skipping issue creation');
               return;
             }
             
-            // Build the issue body
+            console.log('INFO: Building comprehensive vulnerability issue body');
             let issueBody = `# Security Vulnerability Analysis Report\n\n`;
             issueBody += `**Repository:** ${{ github.repository }}\n`;
             issueBody += `**Scan Date:** ${new Date().toISOString()}\n`;
             issueBody += `**Workflow Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n`;
             issueBody += `**Total Vulnerabilities:** ${vulnCount}\n\n`;
             
-            // Add detailed vulnerability information
-            issueBody += `## 🔍 Detected Vulnerabilities\n\n`;
+            issueBody += `## Detected Vulnerabilities\n\n`;
             
+            console.log('INFO: Processing individual vulnerability details for issue body');
             for (const vuln of vulnData) {
               const vulnId = vuln.id || 'unknown';
               const vulnTitle = vuln.title || 'Unknown Vulnerability';
@@ -324,28 +272,25 @@ jobs:
               issueBody += `**Description:** ${description}\n\n`;
               issueBody += `**Fix Command Needed:**\n`;
               issueBody += `\`\`\`bash\n`;
-              issueBody += `# Please provide specific npm/yarn command to fix this vulnerability\n`;
               if (isUpgradable && fixedVersion !== 'No direct fix available') {
                 issueBody += `npm install ${packageName}@${fixedVersion}\n`;
               } else {
                 issueBody += `npm update ${packageName}\n`;
-                issueBody += `# Or alternative fix approach\n`;
               }
               issueBody += `\`\`\`\n\n`;
               issueBody += `---\n\n`;
             }
             
-            // Add action items and AI assistance requests
-            issueBody += `## 🎯 Action Items\n\n`;
+            issueBody += `## Action Items\n\n`;
             issueBody += `- [ ] Review all detected vulnerabilities\n`;
             issueBody += `- [ ] Prioritize critical and high severity vulnerabilities\n`;
             issueBody += `- [ ] Apply fixes suggested by GitHub Copilot\n`;
             issueBody += `- [ ] Test fixes in development environment\n`;
             issueBody += `- [ ] Deploy fixes to production\n\n`;
             
-            issueBody += `## 🤖 GitHub Copilot Assistance Request\n\n`;
+            issueBody += `## GitHub Copilot Assistance Request\n\n`;
             issueBody += `@github-copilot please analyze and fix the ${vulnCount} security vulnerabilities detected in this scan:\n\n`;
-            issueBody += `### 🎯 Primary Objectives:\n`;
+            issueBody += `### Primary Objectives:\n`;
             issueBody += `1. **Immediate Fixes:** Provide specific npm/yarn commands for each vulnerability\n`;
             issueBody += `2. **Risk Assessment:** Evaluate the security impact of each vulnerability\n`;
             issueBody += `3. **Compatibility Analysis:** Check for breaking changes in proposed fixes\n`;
@@ -355,7 +300,6 @@ jobs:
             issueBody += `*This issue was automatically created by the AI Security Scan workflow on ${new Date().toISOString()}*\n`;
             issueBody += `*Scan run: ${{ github.run_id }}*\n`;
             
-            // Determine labels based on vulnerability count and severity
             const labels = ['security', 'vulnerability', 'ai-fix-requested', 'copilot-task', 'scheduled'];
             const hasCritical = vulnData.some(v => v.severity === 'critical');
             const hasHigh = vulnData.some(v => v.severity === 'high');
@@ -366,13 +310,10 @@ jobs:
               labels.push('high-priority');
             }
             
-            // Create the issue title
-            const issueTitle = `🔐 Security Vulnerability Scan - ${new Date().toISOString().split('T')[0]} - ${vulnCount} vulnerabilities found`;
+            const issueTitle = `Security Vulnerability Scan - ${new Date().toISOString().split('T')[0]} - ${vulnCount} vulnerabilities found`;
             
-            console.log('Creating consolidated vulnerability issue...');
-            
+            console.log('INFO: Creating GitHub issue for security vulnerabilities');
             try {
-              // Create the GitHub issue
               const issue = await github.rest.issues.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -381,14 +322,11 @@ jobs:
                 labels: labels
               });
               
-              console.log(`✅ Created consolidated issue: ${issue.data.html_url}`);
+              console.log(`SUCCESS: Created security vulnerability issue #${issue.data.number}`);
               const issueNumber = issue.data.number;
               
-              // Assign issue to Copilot SWE agent
-              console.log('🤖 Attempting to assign issue to GitHub Copilot...');
-              
+              console.log('INFO: Attempting to assign issue to GitHub Copilot SWE agent');
               try {
-                // Fetch suggested actors to get Copilot's ID
                 const suggestedActorsQuery = `
                   query($owner: String!, $repo: String!) {
                     repository(owner: $owner, name: $repo) {
@@ -412,20 +350,13 @@ jobs:
                   owner: context.repo.owner,
                   repo: context.repo.repo
                 });
-
-                console.log('Actors fetched:', actorsResult.repository.suggestedActors.nodes.map(n => n.login).join(', '));
                 
-                // Find Copilot SWE agent
                 const copilotActor = actorsResult.repository.suggestedActors.nodes.find(
                   node => node.login === 'copilot-swe-agent'
                 );
                 
-                if (!copilotActor) {
-                  console.log('❌ Copilot coding agent is not enabled for this repository');
-                } else {
-                  console.log(`✅ Found Copilot actor with ID: ${copilotActor.id}`);
-                  
-                  // Get the issue's GraphQL ID
+                if (copilotActor) {
+                  console.log(`INFO: Found GitHub Copilot SWE agent with ID: ${copilotActor.id}`);
                   const issueQuery = `
                     query($owner: String!, $repo: String!, $issueNumber: Int!) {
                       repository(owner: $owner, name: $repo) {
@@ -442,7 +373,6 @@ jobs:
                     issueNumber: issueNumber
                   });
                   
-                  // Assign the issue to Copilot using GraphQL mutation
                   const assignMutation = `
                     mutation($issueId: ID!, $actorId: ID!) {
                       replaceActorsForAssignable(input: {assignableId: $issueId, actorIds: [$actorId]}) {
@@ -461,19 +391,20 @@ jobs:
                     }
                   `;
                   
-                  const assignResult = await github.graphql(assignMutation, {
+                  await github.graphql(assignMutation, {
                     issueId: issueResult.repository.issue.id,
                     actorId: copilotActor.id
                   });
                   
-                  console.log(`✅ Assigned issue ${issueNumber} to Copilot`);
-                  console.log(`Assignees: ${assignResult.replaceActorsForAssignable.assignable.assignees.nodes.map(n => n.login).join(', ')}`);
+                  console.log(`SUCCESS: Assigned issue #${issueNumber} to GitHub Copilot SWE agent`);
+                } else {
+                  console.log('WARNING: GitHub Copilot SWE agent not found or not available for assignment');
                 }
               } catch (assignError) {
-                console.log('⚠️ Failed to assign issue to Copilot:', assignError.message);
+                console.log(`WARNING: Failed to assign issue to Copilot: ${assignError.message}`);
               }
               
-              // Try to pin the issue
+              console.log('INFO: Attempting to pin the security issue');
               try {
                 await github.graphql(`
                   mutation($issueId: ID!) {
@@ -486,41 +417,39 @@ jobs:
                 `, {
                   issueId: issue.data.node_id
                 });
-                console.log('✅ Pinned issue');
+                console.log('SUCCESS: Pinned security vulnerability issue for visibility');
               } catch (pinError) {
-                console.log('⚠️ Could not pin issue (may not have permissions)');
+                console.log(`WARNING: Could not pin issue (may lack permissions): ${pinError.message}`);
               }
               
-              console.log('Finished creating vulnerability issue');
-              
+              console.log('SUCCESS: Completed vulnerability issue creation and setup');
             } catch (error) {
-              console.error('❌ Failed to create consolidated vulnerability issue:', error);
+              console.error('ERROR: Failed to create consolidated vulnerability issue:', error);
               throw error;
             }
-            
-      # Step 5: Update step summary
+
       - name: Issue creation summary
         if: always()
         run: |
           VULN_COUNT=$(jq 'length' vulnerability-data/detailed-vulnerabilities.json 2>/dev/null || echo "0")
           
-          echo "## 🐛 GitHub Security Issue Created" >> $GITHUB_STEP_SUMMARY
+          echo "## GitHub Security Issue Created" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Vulnerabilities Found:** $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
           echo "**Issue Creation Date:** $(date)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🤖 GitHub Copilot Integration" >> $GITHUB_STEP_SUMMARY
+          echo "### GitHub Copilot Integration" >> $GITHUB_STEP_SUMMARY
           echo "The security vulnerability issue includes:" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ **Automatic Assignment:** Issue assigned to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
-          echo "- 🎯 **Specific Fix Requests:** Detailed Copilot assistance requests" >> $GITHUB_STEP_SUMMARY
-          echo "- 📋 **Actionable Tasks:** Clear requirements for fix commands" >> $GITHUB_STEP_SUMMARY
-          echo "- 🔍 **Vulnerability Analysis:** Comprehensive security context" >> $GITHUB_STEP_SUMMARY
-          echo "- 🚀 **Priority Classification:** Critical/High priority labeling" >> $GITHUB_STEP_SUMMARY
+          echo "- **Automatic Assignment:** Issue assigned to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
+          echo "- **Specific Fix Requests:** Detailed Copilot assistance requests" >> $GITHUB_STEP_SUMMARY
+          echo "- **Actionable Tasks:** Clear requirements for fix commands" >> $GITHUB_STEP_SUMMARY
+          echo "- **Vulnerability Analysis:** Comprehensive security context" >> $GITHUB_STEP_SUMMARY
+          echo "- **Priority Classification:** Critical/High priority labeling" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Labels Applied:** \`security\`, \`vulnerability\`, \`ai-fix-requested\`, \`copilot-task\`, \`scheduled\`" >> $GITHUB_STEP_SUMMARY
           echo "**Priority Labels:** \`critical\`, \`high-priority\` (based on severity)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🎯 Consolidated Report" >> $GITHUB_STEP_SUMMARY
+          echo "### Consolidated Report" >> $GITHUB_STEP_SUMMARY
           echo "A single consolidated vulnerability report issue has been created with:" >> $GITHUB_STEP_SUMMARY
           echo "- Complete vulnerability analysis for Copilot review" >> $GITHUB_STEP_SUMMARY
           echo "- Automatic assignment to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
