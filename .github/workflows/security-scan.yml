@@ -306,6 +306,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         run: |
           echo "🤖 Using GitHub Copilot to analyze and fix vulnerabilities..."
+
+          gh auth login --with-token < <(echo $GITHUB_TOKEN)
           
           # Create prompts for GitHub Copilot based on vulnerabilities
           cat > copilot-prompts.txt << 'EOF'
