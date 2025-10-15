@@ -418,6 +418,8 @@ jobs:
                   owner: context.repo.owner,
                   repo: context.repo.repo
                 });
+
+                console.log('Actors fetched:', actorsResult.repository.suggestedActors.nodes.map(n => n.login).join(', '));
                 
                 // Find Copilot SWE agent
                 const copilotActor = actorsResult.repository.suggestedActors.nodes.find(
