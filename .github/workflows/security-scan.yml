@@ -51,35 +51,41 @@ jobs:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
       - name: Run Snyk vulnerability scan
-        run: snyk test --json --severity-threshold=high > snyk-results.json || true
+        run: snyk test --json > full-scan-results.json || true
 
-      - name: Extract high-risk vulnerabilities
+      - name: Extract high-risk vulnerabilities and generate summary
         run: |
-          snyk test --severity-threshold=high --json | jq '.vulnerabilities[] | select(.severity == "high" or .severity == "critical") | {title: .title, severity: .severity, package: .packageName, version: .version, identifiers: .identifiers}'
-
-      - name: Generate vulnerability summary
-        run: |
+          echo "INFO: Starting vulnerability data extraction and processing"
+          
+          # Check if scan results exist and are valid
+          if [ ! -f "full-scan-results.json" ] || [ ! -s "full-scan-results.json" ]; then
+            echo "WARNING: No scan results found, creating empty vulnerability dataset"
+            echo '{"vulnerabilities": []}' > full-scan-results.json
+          fi
+          
+          # Extract high and critical vulnerabilities for display
+          echo "INFO: Extracting high-risk vulnerabilities"
+          jq '.vulnerabilities[] | select(.severity == "high" or .severity == "critical") | {title: .title, severity: .severity, package: .packageName, version: .version, identifiers: .identifiers}' full-scan-results.json || echo "No high/critical vulnerabilities found"
+          
+          # Generate vulnerability summary
           echo "## Snyk Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Scan Date:** $(date)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          HIGH_COUNT=$(snyk test --json 2>/dev/null | jq '[.vulnerabilities[] | select(.severity == "high")] | length' || echo "0")
-          CRITICAL_COUNT=$(snyk test --json 2>/dev/null | jq '[.vulnerabilities[] | select(.severity == "critical")] | length' || echo "0")
+          HIGH_COUNT=$(jq '[.vulnerabilities[] | select(.severity == "high")] | length' full-scan-results.json 2>/dev/null || echo "0")
+          CRITICAL_COUNT=$(jq '[.vulnerabilities[] | select(.severity == "critical")] | length' full-scan-results.json 2>/dev/null || echo "0")
           
           echo "**Critical Vulnerabilities:** $CRITICAL_COUNT" >> $GITHUB_STEP_SUMMARY
           echo "**High Vulnerabilities:** $HIGH_COUNT" >> $GITHUB_STEP_SUMMARY
+          
+          # Also create the high-severity filtered results for backwards compatibility
+          jq '.vulnerabilities[] | select(.severity == "high" or .severity == "critical")' full-scan-results.json > snyk-results.json || echo "[]" > snyk-results.json
 
       - name: Extract fixable vulnerabilities
         id: extract_vulns
         run: |
-          echo "INFO: Starting vulnerability data extraction and processing"
-          snyk test --json > full-scan-results.json || true
-          
-          if [ ! -f "full-scan-results.json" ] || [ ! -s "full-scan-results.json" ]; then
-            echo "WARNING: No scan results found, creating empty vulnerability dataset"
-            echo '{"vulnerabilities": []}' > full-scan-results.json
-          fi
+          echo "INFO: Processing vulnerability data for fixable issues"
           
           echo "INFO: Filtering high and critical severity vulnerabilities"
           jq -c '.vulnerabilities[]? // [] | select(.severity == "high" or .severity == "critical") | {
@@ -188,7 +194,7 @@ jobs:
       - name: Create consolidated vulnerability issue
         uses: actions/github-script@v7
         with:
-          github-token: ${{ secrets.GH_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const fs = require('fs');
             
