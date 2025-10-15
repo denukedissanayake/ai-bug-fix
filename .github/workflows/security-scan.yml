@@ -246,13 +246,13 @@ jobs:
           && sudo apt update \
           && sudo apt install gh -y
           
-          # Authenticate GitHub CLI
-          echo "Authenticating GitHub CLI..."
-          echo "$GH_TOKEN" | gh auth login --with-token
+          # Verify GitHub CLI authentication (GH_TOKEN is automatically used)
+          echo "Verifying GitHub CLI authentication..."
+          gh auth status || echo "GitHub CLI authentication may have issues"
           
           # Try to install GitHub Copilot CLI extension
           echo "Attempting to install GitHub Copilot CLI extension..."
-          gh extension install github/gh-copilot || echo "⚠️  GitHub Copilot CLI extension not available - will use manual analysis"
+          gh extension install github/gh-copilot 2>/dev/null || echo "⚠️  GitHub Copilot CLI extension not available - will use manual analysis"
           
           # Check if copilot is available
           if gh copilot --help >/dev/null 2>&1; then
