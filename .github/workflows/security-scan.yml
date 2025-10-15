@@ -1,16 +1,12 @@
 name: Fix security vulnerabilities with AI
 
 on:
-  # Trigger on cron schedule (runs daily at 2 AM UTC)
   schedule:
     - cron: '0 2 * * *'
-  
-  # Trigger on pull requests
+  workflow_dispatch:
   pull_request:
     branches:
       - main
-  
-  # Trigger when code is merged to main
   push:
     branches:
       - main
@@ -35,75 +31,98 @@ jobs:
       has-vulnerabilities: ${{ steps.extract_vulns.outputs.fixable_count > 0 }}
     
     steps:
-      # Step 1: Checkout the repository code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Set up Node.js (adjust version as needed for your project)
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '18'
 
-      # Step 3: Install dependencies
       - name: Install dependencies
         run: npm ci
 
-      # Step 4: Install Snyk CLI
       - name: Install Snyk CLI
         run: npm install -g snyk
 
-      # Step 5: Authenticate with Snyk
       - name: Authenticate Snyk
         run: snyk auth ${{ secrets.SNYK_TOKEN }}
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
-      # Step 6: Run Snyk vulnerability scan
-      - name: Run Snyk vulnerability scan
-        run: snyk test --json --severity-threshold=high > snyk-results.json || true
+      - name: Run Snyk dependency vulnerability scan
+        run: snyk test --json > dependency-scan-results.json || true
 
-      # Step 7: Filter and display high-risk vulnerabilities
-      - name: Extract high-risk vulnerabilities
-        run: |
-          echo "=== HIGH RISK VULNERABILITIES ==="
-          snyk test --severity-threshold=high --json | jq '.vulnerabilities[] | select(.severity == "high" or .severity == "critical") | {title: .title, severity: .severity, package: .packageName, version: .version, identifiers: .identifiers}'
+      - name: Run Snyk code analysis scan
+        run: snyk code test --json > code-scan-results.json || true
 
-      # Step 8: Generate summary report of high-risk issues
-      - name: Generate vulnerability summary
+      - name: Merge scan results
         run: |
+          echo "INFO: Merging dependency and code scan results"
+          
+          # Initialize empty results if files don't exist
+          [ ! -f "dependency-scan-results.json" ] && echo '{"vulnerabilities": []}' > dependency-scan-results.json
+          [ ! -f "code-scan-results.json" ] && echo '{"vulnerabilities": []}' > code-scan-results.json
+          
+          # Merge the results using a simpler approach
+          cat > merge-script.jq << 'EOF'
+          {
+            vulnerabilities: ((.[0].vulnerabilities // []) + (.[1].vulnerabilities // [])),
+            dependenciesWithIssues: (.[0].dependenciesWithIssues // []),
+            summary: {
+              total: (((.[0].vulnerabilities // []) + (.[1].vulnerabilities // [])) | length),
+              dependency_issues: ((.[0].vulnerabilities // []) | length),
+              code_issues: ((.[1].vulnerabilities // []) | length)
+            }
+          }
+          EOF
+          
+          jq -s -f merge-script.jq dependency-scan-results.json code-scan-results.json > full-scan-results.json || echo '{"vulnerabilities": []}' > full-scan-results.json
+          
+          echo "INFO: Scan results merged successfully"
+
+      - name: Extract high-risk vulnerabilities and generate summary
+        run: |
+          echo "INFO: Starting vulnerability data extraction and processing"
+          
+          # Check if scan results exist and are valid
+          if [ ! -f "full-scan-results.json" ] || [ ! -s "full-scan-results.json" ]; then
+            echo "WARNING: No scan results found, creating empty vulnerability dataset"
+            echo '{"vulnerabilities": []}' > full-scan-results.json
+          fi
+          
+          # Extract all vulnerabilities for display
+          echo "INFO: Extracting all vulnerabilities"
+          jq '.vulnerabilities[] | {title: .title, severity: .severity, package: .packageName, version: .version, identifiers: .identifiers}' full-scan-results.json || echo "No vulnerabilities found"
+          
+          # Generate vulnerability summary
           echo "## Snyk Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Scan Date:** $(date)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          HIGH_COUNT=$(snyk test --json 2>/dev/null | jq '[.vulnerabilities[] | select(.severity == "high")] | length' || echo "0")
-          CRITICAL_COUNT=$(snyk test --json 2>/dev/null | jq '[.vulnerabilities[] | select(.severity == "critical")] | length' || echo "0")
+          HIGH_COUNT=$(jq '[.vulnerabilities[] | select(.severity == "high")] | length' full-scan-results.json 2>/dev/null || echo "0")
+          CRITICAL_COUNT=$(jq '[.vulnerabilities[] | select(.severity == "critical")] | length' full-scan-results.json 2>/dev/null || echo "0")
+          MEDIUM_COUNT=$(jq '[.vulnerabilities[] | select(.severity == "medium")] | length' full-scan-results.json 2>/dev/null || echo "0")
+          LOW_COUNT=$(jq '[.vulnerabilities[] | select(.severity == "low")] | length' full-scan-results.json 2>/dev/null || echo "0")
+          TOTAL_COUNT=$(jq '[.vulnerabilities[]] | length' full-scan-results.json 2>/dev/null || echo "0")
           
+          echo "**Total Vulnerabilities:** $TOTAL_COUNT" >> $GITHUB_STEP_SUMMARY
           echo "**Critical Vulnerabilities:** $CRITICAL_COUNT" >> $GITHUB_STEP_SUMMARY
           echo "**High Vulnerabilities:** $HIGH_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "**Medium Vulnerabilities:** $MEDIUM_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "**Low Vulnerabilities:** $LOW_COUNT" >> $GITHUB_STEP_SUMMARY
+          
+          # Create filtered results for all vulnerabilities (not just high-severity)
+          jq '.vulnerabilities[]' full-scan-results.json > snyk-results.json || echo "[]" > snyk-results.json
 
-      # Step 9: Parse and extract vulnerabilities for GitHub Copilot processing
       - name: Extract fixable vulnerabilities
         id: extract_vulns
         run: |
-          # Create a detailed vulnerability report
-          echo "Creating detailed vulnerability report..."
-          snyk test --json > full-scan-results.json || true
+          echo "INFO: Processing vulnerability data for fixable issues"
           
-          # Check if we have scan results
-          if [ ! -f "full-scan-results.json" ] || [ ! -s "full-scan-results.json" ]; then
-            echo "No scan results found, creating empty results"
-            echo '{"vulnerabilities": []}' > full-scan-results.json
-          fi
-          
-          # Debug: Show structure of scan results
-          echo "Scan results structure:"
-          jq -r 'keys' full-scan-results.json 2>/dev/null || echo "Invalid JSON in scan results"
-          
-          # Extract high and critical vulnerabilities with detailed context
-          echo "Extracting vulnerabilities..."
-          jq -c '.vulnerabilities[]? // [] | select(.severity == "high" or .severity == "critical") | {
+          echo "INFO: Filtering all severity vulnerabilities"
+          jq -c '.vulnerabilities[]? // [] | {
             id: (.id // "unknown"),
             title: (.title // "Unknown Vulnerability"),
             severity: (.severity // "unknown"),
@@ -119,32 +138,28 @@ jobs:
             from: (.from // [])
           }' full-scan-results.json 2>/dev/null | jq -s '.' > detailed-vulnerabilities.json || echo "[]" > detailed-vulnerabilities.json
           
-          # Count vulnerabilities
           VULN_COUNT=$(jq 'length' detailed-vulnerabilities.json 2>/dev/null | head -n 1 | tr -d '\n\r' || echo "0")
-          # Debug: show raw count value
-          echo "Raw VULN_COUNT value: '$VULN_COUNT'"
-          # Ensure it's a valid number
+          
           if ! [[ "$VULN_COUNT" =~ ^[0-9]+$ ]]; then
-            echo "Invalid vulnerability count: '$VULN_COUNT', setting to 0"
+            echo "WARNING: Invalid vulnerability count detected, setting to 0"
             VULN_COUNT=0
           fi
           echo "fixable_count=$VULN_COUNT" >> $GITHUB_OUTPUT
-          echo "Found $VULN_COUNT high/critical vulnerabilities"
+          echo "INFO: Identified $VULN_COUNT vulnerabilities requiring attention"
           
-          # Create context file for GitHub Copilot
+          echo "INFO: Generating comprehensive vulnerability analysis report"
           echo "# Security Vulnerability Analysis Report" > vulnerability-context.md
           echo "" >> vulnerability-context.md
           echo "**Project:** ${{ github.repository }}" >> vulnerability-context.md
           echo "**Scan Date:** $(date)" >> vulnerability-context.md
-          echo "**Total High/Critical Vulnerabilities:** $VULN_COUNT" >> vulnerability-context.md
+          echo "**Total Vulnerabilities:** $VULN_COUNT" >> vulnerability-context.md
           echo "" >> vulnerability-context.md
           
-          # Generate detailed vulnerability descriptions for Copilot
           echo "## Detected Vulnerabilities" >> vulnerability-context.md
           echo "" >> vulnerability-context.md
           
           if [ "$VULN_COUNT" -gt 0 ] 2>/dev/null; then
-            echo "Processing $VULN_COUNT vulnerabilities..."
+            echo "INFO: Processing detailed vulnerability information for $VULN_COUNT vulnerabilities"
             jq -r '.[] | "### \(.title // "Unknown Vulnerability") (\(.severity // "unknown" | ascii_upcase))
             
             **Package:** \(.packageName // "unknown")@\(.version // "unknown")
@@ -170,15 +185,15 @@ jobs:
             end)
             
             ---
-            "' detailed-vulnerabilities.json >> vulnerability-context.md 2>/dev/null || echo "Error processing vulnerability details" >> vulnerability-context.md
+            "' detailed-vulnerabilities.json >> vulnerability-context.md 2>/dev/null || echo "ERROR: Failed to process vulnerability details" >> vulnerability-context.md
           else
-            echo "No high or critical vulnerabilities detected."
-            echo "No high or critical vulnerabilities detected." >> vulnerability-context.md
+            echo "INFO: No vulnerabilities detected in this scan"
+            echo "No vulnerabilities detected." >> vulnerability-context.md
             echo "" >> vulnerability-context.md
-            echo "✅ This project appears to be secure from high and critical vulnerabilities!" >> vulnerability-context.md
+            echo "STATUS: This project appears to be secure from high and critical vulnerabilities." >> vulnerability-context.md
           fi
+          echo "SUCCESS: Vulnerability analysis and report generation completed"
 
-      # Step 10: Upload vulnerability data for fix job
       - name: Upload vulnerability artifacts
         uses: actions/upload-artifact@v4
         if: always()
@@ -190,499 +205,293 @@ jobs:
             vulnerability-context.md
             snyk-results.json
 
-      # Debug step: Show what we found
-      - name: Debug vulnerability detection
-        if: always()
-        run: |
-          echo "=== DEBUG INFORMATION ==="
-          echo "Vulnerability files created:"
-          ls -la *.json *.md 2>/dev/null || echo "No files found"
-          echo ""
-          echo "Detailed vulnerabilities content:"
-          if [ -f detailed-vulnerabilities.json ]; then
-            cat detailed-vulnerabilities.json | head -20
-          else
-            echo "detailed-vulnerabilities.json not found"
-          fi
-          echo ""
-          echo "Vulnerability context preview:"
-          if [ -f vulnerability-context.md ]; then
-            head -20 vulnerability-context.md
-          else
-            echo "vulnerability-context.md not found"
-          fi
-
-  github-copilot-fix:
+  create-vulnerability-issue:
     runs-on: ubuntu-latest
     needs: vulnerability-detection
     if: needs.vulnerability-detection.outputs.has-vulnerabilities == 'true'
     
-    outputs:
-      package_updated: ${{ steps.apply_copilot_fixes.outputs.package_updated }}
-    
     permissions:
-      contents: write
+      contents: read
+      issues: write
       pull-requests: write
-      actions: read
     
     steps:
-      # Step 1: Checkout the repository code
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Set up Node.js
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-
-      # Step 3: Download vulnerability data
       - name: Download vulnerability data
         uses: actions/download-artifact@v4
         with:
           name: vulnerability-data
           path: vulnerability-data/
 
-      # Step 4: Set up GitHub CLI authentication
-      - name: Set up GitHub CLI authentication
-        run: |
-          # Clear any existing GitHub tokens from environment to avoid conflicts
-          unset GITHUB_TOKEN
-          # Use token directly without environment variable conflicts
-          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
-          gh auth status
-
-      # Step 5: Install GitHub Copilot CLI extension
-      - name: Install GitHub Copilot CLI extension
-        run: |
-          # GitHub CLI is pre-installed in ubuntu-latest runners
-          echo "Using pre-installed GitHub CLI"
-          gh --version
-          
-          # Authenticate GitHub CLI first
-          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
-          
-          # Verify basic GitHub CLI authentication
-          if gh auth status; then
-            echo "✅ GitHub CLI authenticated successfully"
-          else
-            echo "❌ GitHub CLI authentication failed"
-            exit 1
-          fi
-          
-          # Try to install GitHub Copilot CLI extension
-          echo "Installing GitHub Copilot CLI extension..."
-          if gh extension install github/gh-copilot 2>/dev/null; then
-            echo "✅ GitHub Copilot CLI extension installed"
-          elif gh extension list | grep -q "gh-copilot"; then
-            echo "✅ GitHub Copilot CLI extension already exists"
-          else
-            echo "⚠️ GitHub Copilot CLI extension installation failed"
-          fi
-          
-          # Important: GitHub Copilot CLI requires separate authentication
-          # In GitHub Actions, we cannot perform interactive OAuth flow
-          # So we'll implement a robust fallback strategy
-          echo "Note: GitHub Copilot CLI requires interactive authentication which is not available in GitHub Actions"
-          echo "The workflow will use intelligent rule-based analysis as the primary method"
-          
-          # Test Copilot CLI functionality
-          if gh copilot --help >/dev/null 2>&1; then
-            echo "✅ GitHub Copilot CLI is working"
-          else
-            echo "⚠️ GitHub Copilot CLI installed but not functional"
-          fi
-          
-          # Debug information
-          echo "=== GitHub CLI Debug Information ==="
-          echo "GitHub CLI version: $(gh --version)"
-          echo "Authentication status:"
-          gh auth status 2>/dev/null || echo "Auth status check failed"
-          echo "Available extensions:"
-          gh extension list 2>/dev/null || echo "No extensions or list failed"
-          echo "===================================="
-
-      # Step 5: Analyze vulnerabilities with GitHub Copilot
-      - name: Generate fixes with GitHub Copilot
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          echo "🤖 Using GitHub Copilot to analyze and fix vulnerabilities..."
-
-          # gh auth login --with-token < <(echo $GITHUB_TOKEN)
-          
-          # Create prompts for GitHub Copilot based on vulnerabilities
-          cat > copilot-prompts.txt << 'EOF'
-          Based on the security vulnerability report in vulnerability-data/vulnerability-context.md, please provide specific fixes for the Node.js/npm project vulnerabilities:
-
-          1. Analyze each vulnerability and determine the best fix approach
-          2. Generate specific npm commands to update vulnerable packages
-          3. Identify any potential breaking changes or compatibility issues
-          4. Suggest alternative packages if direct updates aren't available
-          5. Provide code-level fixes if the vulnerabilities are in application code
-          
-          Focus on:
-          - High and critical severity vulnerabilities
-          - Dependency updates that maintain compatibility
-          - Security best practices for Node.js applications
-          - Minimal disruption to existing functionality
-          EOF
-          
-          # Check if GitHub Copilot CLI is available and try to use it
-          echo "## 🤖 AI-Powered Security Analysis" > copilot-analysis.md
-          echo "" >> copilot-analysis.md
-          echo "### Analysis Method Detection" >> copilot-analysis.md
-          
-          # Test Copilot CLI availability - but expect it to fail in GitHub Actions
-          COPILOT_AVAILABLE=false
-          API_AVAILABLE=false
-          
-          echo "🤖 Using GitHub Copilot to analyze and fix vulnerabilities..."
-          
-          # Test if Copilot CLI extension exists (but authentication will likely fail)
-          if gh extension list | grep -q "gh-copilot"; then
-            echo "GitHub Copilot CLI extension found"
-            # Try to test Copilot CLI - this will likely fail due to OAuth requirements
-            if timeout 10 gh copilot --help >/dev/null 2>&1; then
-              echo "✅ GitHub Copilot CLI is working (unexpected in GitHub Actions!)"
-              COPILOT_AVAILABLE=true
-            else
-              echo "❌ GitHub Copilot CLI requires interactive OAuth (expected in GitHub Actions)"
-              echo "Falling back to intelligent rule-based analysis"
-            fi
-          else
-            echo "GitHub Copilot CLI extension not available"
-          fi
-          
-          # Always show the detected values for debugging
-          echo "API_AVAILABLE value: $API_AVAILABLE"
-          echo "COPILOT_AVAILABLE value: $COPILOT_AVAILABLE"
-          
-          # Since Copilot CLI won't work in GitHub Actions, use intelligent analysis
-          echo "Using GitHub Copilot CLI for analysis..."
-          
-          echo "### Vulnerability Analysis Results" >> copilot-analysis.md
-          
-          if [ "$COPILOT_AVAILABLE" = "true" ]; then
-            echo "🤖 Using actual GitHub Copilot CLI for analysis..."
-            echo "**Analysis Method:** GitHub Copilot CLI (AI-Powered)" >> copilot-analysis.md
-            echo "" >> copilot-analysis.md
-            
-            # Create a detailed prompt for Copilot with vulnerability context
-            VULN_COUNT=$(jq -r 'length' vulnerability-data/detailed-vulnerabilities.json 2>/dev/null || echo "0")
-            
-            # Read vulnerability context for Copilot prompt
-            VULN_CONTEXT=""
-            if [ -f "vulnerability-data/vulnerability-context.md" ]; then
-              VULN_CONTEXT=$(head -n 50 vulnerability-data/vulnerability-context.md | tr '\n' ' ')
-            fi
-            
-            # Create comprehensive prompt for Copilot
-            PROMPT="Based on this security scan showing $VULN_COUNT vulnerabilities: $VULN_CONTEXT. Generate npm commands to: 1. Update vulnerable packages to secure versions 2. Fix high/critical severity issues first 3. Maintain compatibility where possible 4. Provide alternative solutions for unfixable packages. Focus on actionable npm/yarn commands and code changes."
-            
-            echo "🤖 Generating AI-powered fixes with GitHub Copilot..." >> copilot-analysis.md
-            echo "Prompt: Fix $VULN_COUNT security vulnerabilities found in dependency scan" >> copilot-analysis.md
-            echo "" >> copilot-analysis.md
-            
-            # Try using Copilot CLI with the vulnerability context
-            if timeout 120 gh copilot suggest "$PROMPT" --target shell > copilot-suggestions.txt 2>&1; then
-              echo "✅ GitHub Copilot CLI analysis successful" >> copilot-analysis.md
-              echo "## 🤖 AI-Generated Fix Suggestions:" >> copilot-analysis.md
-              echo '```bash' >> copilot-analysis.md
-              cat copilot-suggestions.txt >> copilot-analysis.md
-              echo '```' >> copilot-analysis.md
-              
-              # Also try code-specific suggestions if there are code vulnerabilities
-              if timeout 60 gh copilot suggest "Review this package.json for security improvements and suggest safer alternatives" --target shell > copilot-code-suggestions.txt 2>&1; then
-                echo "" >> copilot-analysis.md
-                echo "## 🔒 Additional Security Recommendations:" >> copilot-analysis.md
-                echo '```bash' >> copilot-analysis.md
-                cat copilot-code-suggestions.txt >> copilot-analysis.md
-                echo '```' >> copilot-analysis.md
-              fi
-              
-              COPILOT_SUCCESS=true
-              
-            else
-              echo "❌ Copilot CLI analysis failed, falling back to test mode" >> copilot-analysis.md
-              echo "Error output:" >> copilot-analysis.md
-              echo '```' >> copilot-analysis.md
-              cat copilot-suggestions.txt 2>/dev/null || echo "No error output captured" >> copilot-analysis.md
-              echo '```' >> copilot-analysis.md
-              
-              COPILOT_SUCCESS=false
-            fi
-            
-          else
-            echo "🧠 GitHub Copilot CLI not available, using test mode..."
-            echo "**Analysis Method:** Test Mode (README Update)" >> copilot-analysis.md
-            echo "" >> copilot-analysis.md
-            echo "*Note: GitHub Copilot CLI not available - running in test mode with README update.*" >> copilot-analysis.md
-            echo "" >> copilot-analysis.md
-            
-            COPILOT_SUCCESS=false
-          fi
-          
-          # If Copilot failed or not available, create test suggestions
-          if [ "$COPILOT_SUCCESS" != "true" ]; then
-            echo "🧪 Creating test mode analysis..."
-            echo "# Test Mode - README Update Instead of NPM Fixes" > copilot-suggestions.txt
-            echo "## Test Mode Analysis" >> copilot-suggestions.txt
-            echo "This is a test run focusing on README update instead of npm vulnerability fixes." >> copilot-suggestions.txt
-            echo "" >> copilot-suggestions.txt
-            echo "### What will be updated:" >> copilot-suggestions.txt
-            echo "- README.md file with security scan information" >> copilot-suggestions.txt
-            echo "- Test commit and branch creation" >> copilot-suggestions.txt
-            echo "- Pull request creation logic testing" >> copilot-suggestions.txt
-            echo "" >> copilot-suggestions.txt
-            echo "### Test objectives:" >> copilot-suggestions.txt
-            echo "- Verify workflow can detect vulnerabilities" >> copilot-suggestions.txt
-            echo "- Test branch and commit creation" >> copilot-suggestions.txt
-            echo "- Validate PR creation process" >> copilot-suggestions.txt
-            echo "- Skip actual npm dependency updates" >> copilot-suggestions.txt
-            
-            echo "✅ Test mode analysis completed" >> copilot-analysis.md
-            echo "## Test Mode Recommendations:" >> copilot-analysis.md
-            echo '```bash' >> copilot-analysis.md
-            cat copilot-suggestions.txt >> copilot-analysis.md
-            echo '```' >> copilot-analysis.md
-          fi
-          
-          # Continue with the rest of the analysis - skip npm fixes generation since not needed
-          echo "## Next Steps" >> copilot-analysis.md
-          echo "Analysis complete. Proceeding with test mode (README update) instead of npm fixes." >> copilot-analysis.md
-
-      # Step 6: Apply test changes (README update instead of npm fixes)
-      - name: Apply test changes for PR logic
-        id: apply_copilot_fixes
-        run: |
-          echo "🔧 Testing PR creation logic with README update..."
-          
-          # Skip npm-based fixes and just update README for testing
-          echo "Skipping npm-based vulnerability fixes as requested"
-          
-          # Update README.md with security scan information
-          if [ -f README.md ]; then
-            cp README.md README.md.backup
-            
-            # Add security scan information to README
-            echo "" >> README.md
-            echo "## 🔒 Security Status" >> README.md
-            echo "" >> README.md
-            echo "Last security scan: $(date)" >> README.md
-            echo "Vulnerabilities detected: ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }}" >> README.md
-            echo "" >> README.md
-            echo "This project uses automated security scanning to detect and address vulnerabilities." >> README.md
-            echo "Security fixes are managed through AI-assisted analysis and pull requests." >> README.md
-            echo "" >> README.md
-            echo "> **Note**: This section was added by automated security workflow for testing PR logic." >> README.md
-            
-            echo "package_updated=true" >> $GITHUB_OUTPUT
-            echo "✅ README.md was updated for testing PR logic"
-          else
-            echo "package_updated=false" >> $GITHUB_OUTPUT
-            echo "ℹ️  No README.md found to update"
-          fi
-          
-          # Generate a summary of changes
-          echo "## Applied Test Changes" > applied-fixes.md
-          echo "" >> applied-fixes.md
-          echo "### README Changes (for testing PR logic)" >> applied-fixes.md
-          if [ -f README.md.backup ]; then
-            echo "\`\`\`diff" >> applied-fixes.md
-            diff README.md.backup README.md >> applied-fixes.md || true
-            echo "\`\`\`" >> applied-fixes.md
-          fi
-
-      # Step 7: Validate test changes (skip npm validation)
-      - name: Validate test changes
-        if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
-        run: |
-          echo "🧪 Validating README update for PR testing..."
-          
-          # Skip npm-related validation
-          echo "Skipping npm install, test, and build validation as requested"
-          echo "This is a test run focusing only on PR creation logic"
-          
-          # Just verify the README was updated correctly
-          if [ -f README.md ] && grep -q "Security Status" README.md; then
-            echo "✅ README.md update successful"
-          else
-            echo "❌ README.md update failed"
-          fi
-          
-          echo "Test validation complete - focusing on PR creation workflow"
-
-      # Step 8: Upload comprehensive artifacts
-      - name: Upload fix artifacts
-        uses: actions/upload-artifact@v4
-        if: always()
+      - name: Create consolidated vulnerability issue
+        uses: actions/github-script@v7
         with:
-          name: ai-security-fixes
-          path: |
-            copilot-fixes.sh
-            copilot-analysis.md
-            copilot-suggestions.txt
-            applied-fixes.md
-            package.json.backup
-            vulnerability-data/
+          github-token: ${{ secrets.GH_TOKEN }}
+          script: |
+            const fs = require('fs');
+            
+            console.log('INFO: Initializing vulnerability issue creation process');
+            
+            const labelsToCreate = [
+              { name: 'security', description: 'Security vulnerability', color: 'd73a4a' },
+              { name: 'vulnerability', description: 'Security vulnerability found by scan', color: 'b60205' },
+              { name: 'high-priority', description: 'High priority issue', color: 'ff6b6b' },
+              { name: 'critical', description: 'Critical severity issue', color: 'd10000' },
+              { name: 'ai-fix-requested', description: 'AI assistance requested for fix', color: '0052cc' },
+              { name: 'copilot-task', description: 'Task assigned to GitHub Copilot', color: '0366d6' },
+              { name: 'scheduled', description: 'Automatically scheduled task', color: '7057ff' }
+            ];
+            
+            console.log('INFO: Creating required labels for security issue tracking');
+            for (const label of labelsToCreate) {
+              try {
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ...label
+                });
+                console.log(`INFO: Successfully created label: ${label.name}`);
+              } catch (error) {
+                if (error.status !== 422) {
+                  console.log(`WARNING: Could not create label ${label.name}: ${error.message}`);
+                } else {
+                  console.log(`INFO: Label ${label.name} already exists`);
+                }
+              }
+            }
+            
+            console.log('INFO: Checking for vulnerability data file');
+            if (!fs.existsSync('vulnerability-data/detailed-vulnerabilities.json')) {
+              console.log('WARNING: No vulnerability data file found, skipping issue creation');
+              return;
+            }
+            
+            console.log('INFO: Reading vulnerability data from scan results');
+            const vulnData = JSON.parse(fs.readFileSync('vulnerability-data/detailed-vulnerabilities.json', 'utf8'));
+            const vulnCount = vulnData.length;
+            
+            console.log(`INFO: Found ${vulnCount} vulnerabilities to process`);
+            if (vulnCount === 0) {
+              console.log('INFO: No vulnerabilities detected, skipping issue creation');
+              return;
+            }
+            
+            console.log('INFO: Building comprehensive vulnerability issue body');
+            let issueBody = `# Security Vulnerability Analysis Report\n\n`;
+            issueBody += `**Repository:** ${{ github.repository }}\n`;
+            issueBody += `**Scan Date:** ${new Date().toISOString()}\n`;
+            issueBody += `**Workflow Run:** [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})\n`;
+            issueBody += `**Total Vulnerabilities:** ${vulnCount}\n\n`;
+            
+            issueBody += `## Detected Vulnerabilities\n\n`;
+            
+            console.log('INFO: Processing individual vulnerability details for issue body');
+            for (const vuln of vulnData) {
+              const vulnId = vuln.id || 'unknown';
+              const vulnTitle = vuln.title || 'Unknown Vulnerability';
+              const severity = (vuln.severity || 'unknown').toUpperCase();
+              const packageName = vuln.packageName || 'unknown';
+              const version = vuln.version || 'unknown';
+              const fixedVersion = vuln.nearestFixedInVersion || 'No direct fix available';
+              const description = vuln.description || 'No description available';
+              const isUpgradable = vuln.isUpgradable || false;
+              const isPatchable = vuln.isPatchable || false;
+              const cvssScore = vuln.CVSSv3 || 'N/A';
+              const dependencyPath = Array.isArray(vuln.from) ? vuln.from.join(' → ') : 'Direct dependency';
+              
+              issueBody += `### ${vulnTitle} in ${packageName}@${version} (${severity})\n\n`;
+              issueBody += `**Package:** \`${packageName}@${version}\`\n`;
+              issueBody += `**CVE ID:** ${vulnId}\n`;
+              issueBody += `**CVSS Score:** ${cvssScore}\n`;
+              issueBody += `**Fixed In:** \`${fixedVersion}\`\n`;
+              issueBody += `**Upgradable:** ${isUpgradable}\n`;
+              issueBody += `**Patchable:** ${isPatchable}\n`;
+              issueBody += `**Dependency Path:** ${dependencyPath}\n\n`;
+              issueBody += `**Description:** ${description}\n\n`;
+              issueBody += `**Fix Command Needed:**\n`;
+              issueBody += `\`\`\`bash\n`;
+              if (isUpgradable && fixedVersion !== 'No direct fix available') {
+                issueBody += `npm install ${packageName}@${fixedVersion}\n`;
+              } else {
+                issueBody += `npm update ${packageName}\n`;
+              }
+              issueBody += `\`\`\`\n\n`;
+              issueBody += `---\n\n`;
+            }
+            
+            issueBody += `## Action Items\n\n`;
+            issueBody += `- [ ] Review all detected vulnerabilities\n`;
+            issueBody += `- [ ] Prioritize critical and high severity vulnerabilities\n`;
+            issueBody += `- [ ] Apply fixes suggested by GitHub Copilot\n`;
+            issueBody += `- [ ] Test fixes in development environment\n`;
+            issueBody += `- [ ] Deploy fixes to production\n\n`;
+            
+            issueBody += `## GitHub Copilot Assistance Request\n\n`;
+            issueBody += `@github-copilot please analyze and fix the ${vulnCount} security vulnerabilities detected in this scan:\n\n`;
+            issueBody += `### Primary Objectives:\n`;
+            issueBody += `1. **Immediate Fixes:** Provide specific npm/yarn commands for each vulnerability\n`;
+            issueBody += `2. **Risk Assessment:** Evaluate the security impact of each vulnerability\n`;
+            issueBody += `3. **Compatibility Analysis:** Check for breaking changes in proposed fixes\n`;
+            issueBody += `4. **Testing Strategy:** Recommend verification steps for each fix\n`;
+            issueBody += `5. **Alternative Solutions:** Suggest alternatives if direct updates aren't safe\n\n`;
+            
+            issueBody += `*This issue was automatically created by the AI Security Scan workflow on ${new Date().toISOString()}*\n`;
+            issueBody += `*Scan run: ${{ github.run_id }}*\n`;
+            
+            const labels = ['security', 'vulnerability', 'ai-fix-requested', 'copilot-task', 'scheduled'];
+            const hasCritical = vulnData.some(v => v.severity === 'critical');
+            const hasHigh = vulnData.some(v => v.severity === 'high');
+            
+            if (hasCritical) {
+              labels.push('critical', 'high-priority');
+            } else if (hasHigh) {
+              labels.push('high-priority');
+            }
+            
+            const issueTitle = `Security Vulnerability Scan - ${new Date().toISOString().split('T')[0]} - ${vulnCount} vulnerabilities found`;
+            
+            console.log('INFO: Creating GitHub issue for security vulnerabilities');
+            try {
+              const issue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: issueTitle,
+                body: issueBody,
+                labels: labels
+              });
+              
+              console.log(`SUCCESS: Created security vulnerability issue #${issue.data.number}`);
+              const issueNumber = issue.data.number;
+              
+              console.log('INFO: Attempting to assign issue to GitHub Copilot SWE agent');
+              try {
+                const suggestedActorsQuery = `
+                  query($owner: String!, $repo: String!) {
+                    repository(owner: $owner, name: $repo) {
+                      suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 100) {
+                        nodes {
+                          login
+                          __typename
+                          ... on Bot {
+                            id
+                          }
+                          ... on User {
+                            id
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                
+                const actorsResult = await github.graphql(suggestedActorsQuery, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo
+                });
+                
+                const copilotActor = actorsResult.repository.suggestedActors.nodes.find(
+                  node => node.login === 'copilot-swe-agent'
+                );
+                
+                if (copilotActor) {
+                  console.log(`INFO: Found GitHub Copilot SWE agent with ID: ${copilotActor.id}`);
+                  const issueQuery = `
+                    query($owner: String!, $repo: String!, $issueNumber: Int!) {
+                      repository(owner: $owner, name: $repo) {
+                        issue(number: $issueNumber) {
+                          id
+                        }
+                      }
+                    }
+                  `;
+                  
+                  const issueResult = await github.graphql(issueQuery, {
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    issueNumber: issueNumber
+                  });
+                  
+                  const assignMutation = `
+                    mutation($issueId: ID!, $actorId: ID!) {
+                      replaceActorsForAssignable(input: {assignableId: $issueId, actorIds: [$actorId]}) {
+                        assignable {
+                          ... on Issue {
+                            id
+                            title
+                            assignees(first: 10) {
+                              nodes {
+                                login
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  `;
+                  
+                  await github.graphql(assignMutation, {
+                    issueId: issueResult.repository.issue.id,
+                    actorId: copilotActor.id
+                  });
+                  
+                  console.log(`SUCCESS: Assigned issue #${issueNumber} to GitHub Copilot SWE agent`);
+                } else {
+                  console.log('WARNING: GitHub Copilot SWE agent not found or not available for assignment');
+                }
+              } catch (assignError) {
+                console.log(`WARNING: Failed to assign issue to Copilot: ${assignError.message}`);
+              }
+              
+              console.log('INFO: Attempting to pin the security issue');
+              try {
+                await github.graphql(`
+                  mutation($issueId: ID!) {
+                    pinIssue(input: {issueId: $issueId}) {
+                      issue {
+                        id
+                      }
+                    }
+                  }
+                `, {
+                  issueId: issue.data.node_id
+                });
+                console.log('SUCCESS: Pinned security vulnerability issue for visibility');
+              } catch (pinError) {
+                console.log(`WARNING: Could not pin issue (may lack permissions): ${pinError.message}`);
+              }
+              
+              console.log('SUCCESS: Completed vulnerability issue creation and setup');
+            } catch (error) {
+              console.error('ERROR: Failed to create consolidated vulnerability issue:', error);
+              throw error;
+            }
 
-      # Step 10: Update job summary (without PR creation)
-      - name: Create security fix branch and commit
-        id: create_branch
-        if: steps.apply_copilot_fixes.outputs.package_updated == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Create unique branch name
-          BRANCH_NAME="ai-security-fix-$(date +%Y%m%d-%H%M%S)"
-          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_OUTPUT
-          
-          # Configure git
-          git config --local user.email "action@github.com"
-          git config --local user.name "GitHub Actions (AI Security Fixes)"
-          
-          # Create and switch to new branch
-          git checkout -b $BRANCH_NAME
-          
-          # Add all changed files
-          git add README.md applied-fixes.md copilot-analysis.md || true
-          
-          # Create comprehensive commit message
-          COMMIT_MSG="🤖� AI-Workflow Test: README update for PR logic testing
-
-          Testing automated PR creation workflow with README update instead of npm fixes.
-          
-          This commit tests the AI workflow's ability to:
-          - Detect vulnerabilities (${{ needs.vulnerability-detection.outputs.vulnerabilities-found }} found)
-          - Create branches and commits
-          - Generate pull requests
-          
-          Analysis method: Rule-based Analysis (npm fixes skipped)
-          Test date: $(date)
-          
-          Co-authored-by: GitHub Actions <actions@github.com>"
-          
-          git commit -m "$COMMIT_MSG"
-          
-          # Push the branch
-          git push origin $BRANCH_NAME
-          
-          # Create labels if they don't exist
-          echo "Creating repository labels..."
-          gh label create "testing" --description "Testing and validation changes" --color "f9c513" --force || echo "Testing label exists"
-          gh label create "ai-workflow" --description "AI workflow testing and development" --color "0052cc" --force || echo "AI-workflow label exists"
-          gh label create "automated" --description "Automated changes applied" --color "1d76db" --force || echo "Automated label exists"
-          
-          # Generate PR URL for manual creation and try automatic creation
-          PR_URL="https://github.com/${{ github.repository }}/compare/main...$BRANCH_NAME?quick_pull=1"
-          echo "PR_URL=$PR_URL" >> $GITHUB_OUTPUT
-          
-          # Try to create PR using GitHub CLI (with fallback to manual)
-          echo "Attempting to create pull request..."
-          
-          PR_TITLE="🤖� AI-Workflow Test: README update for PR logic testing ($(date +%Y-%m-%d))"
-          
-          # Try creating PR with GitHub CLI using simple body
-          if gh pr create \
-            --title "$PR_TITLE" \
-            --body "🤖📝 AI-Workflow Testing - Testing automated PR creation logic with README update instead of npm fixes. This validates the workflow's ability to detect vulnerabilities and create PRs without applying actual dependency fixes." \
-            --head "$BRANCH_NAME" \
-            --base "main" \
-            --label "testing" \
-            --label "ai-workflow" \
-            --label "automated" 2>/dev/null; then
-            echo "✅ Pull request created successfully via GitHub CLI"
-            PR_CREATED="true"
-          else
-            echo "⚠️ GitHub CLI PR creation failed - manual creation required"
-            echo "This is expected due to GitHub Actions security restrictions"
-            PR_CREATED="false"
-          fi
-          
-          echo "PR_CREATED=$PR_CREATED" >> $GITHUB_OUTPUT
-          
-          echo "Branch created successfully: $BRANCH_NAME"
-          if [ "$PR_CREATED" = "true" ]; then
-            echo "Pull request created automatically"
-          else
-            echo "Manual PR creation required - link provided below"
-            echo "PR URL: $PR_URL"
-          fi
-
-      # Step 7: PR Creation Summary
-      - name: AI-Workflow Test Summary
+      - name: Issue creation summary
         if: always()
         run: |
-          echo "## 🤖📝 AI-Workflow Testing Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Test Date:** $(date)" >> $GITHUB_STEP_SUMMARY
-          echo "**Vulnerabilities Detected:** ${{ needs.vulnerability-detection.outputs.vulnerabilities-found }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Test Mode:** README update (npm fixes skipped)" >> $GITHUB_STEP_SUMMARY
+          VULN_COUNT=$(jq 'length' vulnerability-data/detailed-vulnerabilities.json 2>/dev/null || echo "0")
           
-          # Show detailed analysis method detection
+          echo "## GitHub Security Issue Created" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Analysis Method Detection" >> $GITHUB_STEP_SUMMARY
-          
-          if gh copilot --help >/dev/null 2>&1; then
-            echo "**GitHub Copilot CLI:** ✅ Available" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**GitHub Copilot CLI:** ❌ Not available" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          if gh api /user/copilot/billing >/dev/null 2>&1; then
-            echo "**GitHub Copilot API:** ✅ Accessible" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**GitHub Copilot API:** ❌ Not accessible (may need subscription)" >> $GITHUB_STEP_SUMMARY
-          fi
-          
+          echo "**Vulnerabilities Found:** $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
+          echo "**Issue Creation Date:** $(date)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "${{ steps.create_branch.outputs.BRANCH_NAME }}" != "" ]; then
-            echo "**🤖 Test Changes Applied:** ✅ Yes (README updated)" >> $GITHUB_STEP_SUMMARY
-            echo "**🌿 Branch Created:** ✅ Yes (${{ steps.create_branch.outputs.BRANCH_NAME }})" >> $GITHUB_STEP_SUMMARY
-            
-            if [ "${{ steps.create_branch.outputs.PR_CREATED }}" = "true" ]; then
-              echo "**� Pull Request:** ✅ Created automatically" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "**📋 Pull Request:** ⚠️ Manual creation required" >> $GITHUB_STEP_SUMMARY
-              echo "**�🔗 Create PR:** [Click here to create PR](${{ steps.create_branch.outputs.PR_URL }})" >> $GITHUB_STEP_SUMMARY
-            fi
-          else
-            echo "**🤖 Test Changes Applied:** ❌ No changes generated" >> $GITHUB_STEP_SUMMARY
-          fi
-          
+          echo "### GitHub Copilot Integration" >> $GITHUB_STEP_SUMMARY
+          echo "The security vulnerability issue includes:" >> $GITHUB_STEP_SUMMARY
+          echo "- **Automatic Assignment:** Issue assigned to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
+          echo "- **Specific Fix Requests:** Detailed Copilot assistance requests" >> $GITHUB_STEP_SUMMARY
+          echo "- **Actionable Tasks:** Clear requirements for fix commands" >> $GITHUB_STEP_SUMMARY
+          echo "- **Vulnerability Analysis:** Comprehensive security context" >> $GITHUB_STEP_SUMMARY
+          echo "- **Priority Classification:** Critical/High priority labeling" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**📊 Artifacts:** Check 'ai-security-fixes' for detailed analysis" >> $GITHUB_STEP_SUMMARY
-          
-          # Add explanation about test mode
+          echo "**Labels Applied:** \`security\`, \`vulnerability\`, \`ai-fix-requested\`, \`copilot-task\`, \`scheduled\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Priority Labels:** \`critical\`, \`high-priority\` (based on severity)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🧪 Test Mode Information" >> $GITHUB_STEP_SUMMARY
-          echo "This workflow run is in **test mode** and skips npm-based vulnerability fixes." >> $GITHUB_STEP_SUMMARY
-          echo "Instead, it updates the README.md file to test the PR creation logic." >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**What was tested:**" >> $GITHUB_STEP_SUMMARY
-          echo "- Vulnerability detection and analysis" >> $GITHUB_STEP_SUMMARY
-          echo "- Branch creation and commits" >> $GITHUB_STEP_SUMMARY
-          echo "- Pull request creation workflow" >> $GITHUB_STEP_SUMMARY
-          echo "- GitHub CLI integration" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🚀 Next Steps" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.create_branch.outputs.BRANCH_NAME }}" != "" ]; then
-            if [ "${{ steps.create_branch.outputs.PR_CREATED }}" = "true" ]; then
-              echo "1. **Review the test pull request** in the repository" >> $GITHUB_STEP_SUMMARY
-              echo "2. **Verify the README changes** to confirm workflow functionality" >> $GITHUB_STEP_SUMMARY
-              echo "3. **Close or merge the test PR** as appropriate" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "1. **[Create Test Pull Request](${{ steps.create_branch.outputs.PR_URL }})** to complete the workflow test" >> $GITHUB_STEP_SUMMARY
-              echo "2. **Review the changes** in the generated branch: \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
-              echo "3. **Verify the README update** confirms the workflow is working" >> $GITHUB_STEP_SUMMARY
-              echo "4. **Close the test PR** after verification" >> $GITHUB_STEP_SUMMARY
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "**Manual PR Creation Link:** ${{ steps.create_branch.outputs.PR_URL }}" >> $GITHUB_STEP_SUMMARY
-            fi
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "**Test branch:** \`${{ steps.create_branch.outputs.BRANCH_NAME }}\`" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "No test changes were applied. Check the workflow logs for issues." >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "### Consolidated Report" >> $GITHUB_STEP_SUMMARY
+          echo "A single consolidated vulnerability report issue has been created with:" >> $GITHUB_STEP_SUMMARY
+          echo "- Complete vulnerability analysis for Copilot review" >> $GITHUB_STEP_SUMMARY
+          echo "- Automatic assignment to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
+          echo "- Comprehensive fix request with specific objectives" >> $GITHUB_STEP_SUMMARY
+          echo "- Expected response format and priority classification" >> $GITHUB_STEP_SUMMARY
