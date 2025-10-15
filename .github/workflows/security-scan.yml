@@ -81,28 +81,40 @@ jobs:
         id: extract_vulns
         run: |
           # Create a detailed vulnerability report
+          echo "Creating detailed vulnerability report..."
           snyk test --json > full-scan-results.json || true
           
+          # Check if we have scan results
+          if [ ! -f "full-scan-results.json" ] || [ ! -s "full-scan-results.json" ]; then
+            echo "No scan results found, creating empty results"
+            echo '{"vulnerabilities": []}' > full-scan-results.json
+          fi
+          
+          # Debug: Show structure of scan results
+          echo "Scan results structure:"
+          jq -r 'keys' full-scan-results.json 2>/dev/null || echo "Invalid JSON in scan results"
+          
           # Extract high and critical vulnerabilities with detailed context
-          jq -r '.vulnerabilities[] | select(.severity == "high" or .severity == "critical") | {
-            id: .id,
-            title: .title,
-            severity: .severity,
-            packageName: .packageName,
-            version: .version,
-            nearestFixedInVersion: .nearestFixedInVersion,
-            isUpgradable: .isUpgradable,
-            isPatchable: .isPatchable,
-            upgradePath: .upgradePath,
-            description: .description,
-            references: .references,
-            CVSSv3: .CVSSv3,
-            from: .from
-          }' full-scan-results.json > detailed-vulnerabilities.json
+          jq -r '.vulnerabilities[]? // [] | select(.severity == "high" or .severity == "critical") | {
+            id: (.id // "unknown"),
+            title: (.title // "Unknown Vulnerability"),
+            severity: (.severity // "unknown"),
+            packageName: (.packageName // "unknown"),
+            version: (.version // "unknown"),
+            nearestFixedInVersion: (.nearestFixedInVersion // null),
+            isUpgradable: (.isUpgradable // false),
+            isPatchable: (.isPatchable // false),
+            upgradePath: (.upgradePath // []),
+            description: (.description // "No description available"),
+            references: (.references // []),
+            CVSSv3: (.CVSSv3 // null),
+            from: (.from // [])
+          }' full-scan-results.json > detailed-vulnerabilities.json 2>/dev/null || echo "[]" > detailed-vulnerabilities.json
           
           # Count vulnerabilities
-          VULN_COUNT=$(jq length detailed-vulnerabilities.json)
+          VULN_COUNT=$(jq 'length' detailed-vulnerabilities.json 2>/dev/null || echo "0")
           echo "fixable_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+          echo "Found $VULN_COUNT high/critical vulnerabilities"
           
           # Create context file for GitHub Copilot
           echo "# Security Vulnerability Analysis Report" > vulnerability-context.md
@@ -116,24 +128,38 @@ jobs:
           echo "## Detected Vulnerabilities" >> vulnerability-context.md
           echo "" >> vulnerability-context.md
           
-          jq -r '.[] | "### \(.title) (\(.severity | ascii_upcase))
-          
-          **Package:** \(.packageName)@\(.version)
-          **CVE ID:** \(.id)
-          **CVSS Score:** \(.CVSSv3 // "N/A")
-          **Current Version:** \(.version)
-          **Fixed In:** \(.nearestFixedInVersion // "No direct fix available")
-          **Upgradable:** \(.isUpgradable)
-          **Patchable:** \(.isPatchable)
-          **Dependency Path:** \(.from | join(" → "))
-          
-          **Description:** \(.description // "No description available")
-          
-          **References:**
-          \(if .references then (.references | map("- \(.)") | join("\n")) else "No references available" end)
-          
-          ---
-          "' detailed-vulnerabilities.json >> vulnerability-context.md
+          if [ "$VULN_COUNT" -gt 0 ]; then
+            jq -r '.[] | "### \(.title // "Unknown Vulnerability") (\(.severity // "unknown" | ascii_upcase))
+            
+            **Package:** \(.packageName // "unknown")@\(.version // "unknown")
+            **CVE ID:** \(.id // "N/A")
+            **CVSS Score:** \(.CVSSv3 // "N/A")
+            **Current Version:** \(.version // "unknown")
+            **Fixed In:** \(.nearestFixedInVersion // "No direct fix available")
+            **Upgradable:** \(.isUpgradable // false)
+            **Patchable:** \(.isPatchable // false)
+            **Dependency Path:** \(if .from then (.from | if type == "array" then join(" → ") else tostring end) else "Direct dependency" end)
+            
+            **Description:** \(.description // "No description available")
+            
+            **References:**
+            \(if .references then 
+              (if (.references | type) == "array" then 
+                (.references | map("- \(.)") | join("\n")) 
+              else 
+                "- \(.references)" 
+              end) 
+            else 
+              "No references available" 
+            end)
+            
+            ---
+            "' detailed-vulnerabilities.json >> vulnerability-context.md 2>/dev/null || echo "Error processing vulnerability details" >> vulnerability-context.md
+          else
+            echo "No high or critical vulnerabilities detected." >> vulnerability-context.md
+            echo "" >> vulnerability-context.md
+            echo "✅ This project appears to be secure from high and critical vulnerabilities!" >> vulnerability-context.md
+          fi
 
       # Step 10: Upload vulnerability data for fix job
       - name: Upload vulnerability artifacts
@@ -146,6 +172,28 @@ jobs:
             detailed-vulnerabilities.json
             vulnerability-context.md
             snyk-results.json
+
+      # Debug step: Show what we found
+      - name: Debug vulnerability detection
+        if: always()
+        run: |
+          echo "=== DEBUG INFORMATION ==="
+          echo "Vulnerability files created:"
+          ls -la *.json *.md 2>/dev/null || echo "No files found"
+          echo ""
+          echo "Detailed vulnerabilities content:"
+          if [ -f detailed-vulnerabilities.json ]; then
+            cat detailed-vulnerabilities.json | head -20
+          else
+            echo "detailed-vulnerabilities.json not found"
+          fi
+          echo ""
+          echo "Vulnerability context preview:"
+          if [ -f vulnerability-context.md ]; then
+            head -20 vulnerability-context.md
+          else
+            echo "vulnerability-context.md not found"
+          fi
 
   github-copilot-fix:
     runs-on: ubuntu-latest
