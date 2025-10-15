@@ -237,14 +237,14 @@ jobs:
       # Step 3: Set up GitHub CLI authentication
       - name: Set up GitHub CLI authentication
         run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+          echo "${{ secrets.GH_TOKEN }}" | gh auth login --with-token
           gh auth status
 
       # Step 4: Create a single GitHub issue for all vulnerabilities
       - name: Create consolidated vulnerability issue
         uses: actions/github-script@v7
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
         with:
           script: |
             const fs = require('fs');
