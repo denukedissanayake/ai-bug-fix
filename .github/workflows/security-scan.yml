@@ -315,8 +315,18 @@ jobs:
           echo "# Vulnerability-specific fixes:" >> copilot-fixes.sh
           jq -r '.[] | select(.isUpgradable == true) | 
             "echo \"Fixing " + (.title // "Unknown") + " in " + (.packageName // "unknown") + "...\"",
-            "npm install " + (.packageName // "unknown") + "@" + (.nearestFixedInVersion // "latest") + " --save"' \
+            if (.packageName | test("babel|webpack|@types|eslint|jest|test")) then
+              "npm install " + (.packageName // "unknown") + "@" + (.nearestFixedInVersion // "latest") + " --save-dev"
+            else
+              "npm install " + (.packageName // "unknown") + "@" + (.nearestFixedInVersion // "latest") + " --save"
+            end' \
             vulnerability-data/detailed-vulnerabilities.json >> copilot-fixes.sh 2>/dev/null || echo "# No upgradable vulnerabilities found" >> copilot-fixes.sh
+          
+          # Add common missing dev dependencies for Babel/Webpack projects
+          echo "" >> copilot-fixes.sh
+          echo "# Install commonly missing dev dependencies" >> copilot-fixes.sh
+          echo "echo \"Installing missing dev dependencies...\"" >> copilot-fixes.sh
+          echo "npm install @babel/plugin-transform-runtime @babel/runtime --save-dev --silent 2>/dev/null || true" >> copilot-fixes.sh
           
           # Add additional security improvements
           echo "" >> copilot-fixes.sh
@@ -366,16 +376,38 @@ jobs:
           echo "🧪 Testing applied security fixes..."
           
           # Install updated dependencies
+          echo "Installing updated dependencies..."
           npm ci
           
+          # Check if there are missing dev dependencies and install them
+          echo "Checking for missing Babel dependencies..."
+          npm install @babel/plugin-transform-runtime --save-dev --silent 2>/dev/null || echo "Babel plugin not needed or already present"
+          
           # Run available tests
+          echo "Running tests..."
           npm test --if-present || echo "⚠️  No tests found or tests failed"
           
-          # Try to build the application
-          npm run build --if-present || echo "⚠️  Build failed or no build script"
+          # Try to build the application with better error handling
+          echo "Attempting to build application..."
+          if npm run build --if-present 2>/dev/null; then
+            echo "✅ Build completed successfully"
+          else
+            echo "⚠️  Build failed - this might be due to missing dev dependencies or configuration issues"
+            echo "Checking if package.json has a build script..."
+            if jq -e '.scripts.build' package.json > /dev/null 2>&1; then
+              echo "Build script exists but failed - might need additional dependencies"
+              echo "Trying to install common missing dependencies..."
+              npm install @babel/core @babel/preset-env @babel/preset-react --save-dev --silent 2>/dev/null || true
+              echo "Retrying build with additional dependencies..."
+              npm run build 2>/dev/null || echo "Build still failing - manual intervention may be needed"
+            else
+              echo "No build script found in package.json - skipping build validation"
+            fi
+          fi
           
           # Run a basic security check
-          npm audit --audit-level=high || echo "⚠️  Some vulnerabilities may remain"
+          echo "Running post-fix security audit..."
+          npm audit --audit-level=high || echo "⚠️  Some vulnerabilities may remain - this is expected during validation"
 
       # Step 8: Create detailed security fix PR
       - name: Create AI-Inspired Security Fix PR
