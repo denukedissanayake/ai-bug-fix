@@ -421,8 +421,9 @@ jobs:
           echo '```bash' >> copilot-analysis.md
           cat copilot-suggestions.txt >> copilot-analysis.md
           echo '```' >> copilot-analysis.md
-            echo "No GitHub Copilot access available - using comprehensive rule-based analysis" >> copilot-analysis.md
-          fi
+          
+          # Continue with the rest of the analysis
+          echo "## Next Steps" >> copilot-analysis.md
           
           # Extract actionable commands from vulnerability data
           echo "#!/bin/bash" > copilot-fixes.sh
