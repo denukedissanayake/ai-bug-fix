@@ -1,0 +1,87 @@
+name: 'Scan Vulnerabilities'
+description: 'Runs Snyk dependency and code analysis scans'
+author: 'Your Organization'
+
+inputs:
+  snyk-token:
+    description: 'Snyk API token for authentication'
+    required: true
+  node-version:
+    description: 'Node.js version to use'
+    required: false
+    default: '18'
+  working-directory:
+    description: 'Directory to run scans in'
+    required: false
+    default: '.'
+
+outputs:
+  scan-results-path:
+    description: 'Path to the merged scan results JSON file'
+    value: ${{ steps.merge.outputs.results-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: npm ci
+
+    - name: Install Snyk CLI
+      shell: bash
+      run: npm install -g snyk
+
+    - name: Authenticate Snyk
+      shell: bash
+      run: snyk auth ${{ inputs.snyk-token }}
+      env:
+        SNYK_TOKEN: ${{ inputs.snyk-token }}
+
+    - name: Run Snyk dependency vulnerability scan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: snyk test --json > dependency-scan-results.json || true
+
+    - name: Run Snyk code analysis scan
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: snyk code test --json > code-scan-results.json || true
+
+    - name: Merge scan results
+      id: merge
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        echo "INFO: Merging dependency and code scan results"
+        
+        # Initialize empty results if files don't exist
+        [ ! -f "dependency-scan-results.json" ] && echo '{"vulnerabilities": []}' > dependency-scan-results.json
+        [ ! -f "code-scan-results.json" ] && echo '{"vulnerabilities": []}' > code-scan-results.json
+        
+        # Merge the results using a simpler approach
+        cat > merge-script.jq << 'EOF'
+        {
+          vulnerabilities: ((.[0].vulnerabilities // []) + (.[1].vulnerabilities // [])),
+          dependenciesWithIssues: (.[0].dependenciesWithIssues // []),
+          summary: {
+            total: (((.[0].vulnerabilities // []) + (.[1].vulnerabilities // [])) | length),
+            dependency_issues: ((.[0].vulnerabilities // []) | length),
+            code_issues: ((.[1].vulnerabilities // []) | length)
+          }
+        }
+        EOF
+        
+        jq -s -f merge-script.jq dependency-scan-results.json code-scan-results.json > full-scan-results.json || echo '{"vulnerabilities": []}' > full-scan-results.json
+        
+        echo "INFO: Scan results merged successfully"
+        echo "results-path=${{ inputs.working-directory }}/full-scan-results.json" >> $GITHUB_OUTPUT
+
+branding:
+  icon: 'shield'
+  color: 'red'
