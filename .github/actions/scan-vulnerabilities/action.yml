@@ -294,8 +294,17 @@ runs:
           snyk)
             if [ -n "${{ inputs.snyk-token }}" ]; then
               snyk auth ${{ inputs.snyk-token }}
-              snyk test --json --severity-threshold=${{ inputs.severity-threshold }} > dependency-scan-results.json || echo '{"vulnerabilities": []}' > dependency-scan-results.json
-              snyk code test --json --severity-threshold=${{ inputs.severity-threshold }} > code-scan-results.json || echo '{"vulnerabilities": []}' > code-scan-results.json
+              # Snyk returns exit code 1 when vulnerabilities are found, so we need to handle it properly
+              snyk test --json --severity-threshold=${{ inputs.severity-threshold }} > dependency-scan-results.json || true
+              # If the file is empty or invalid, create an empty array
+              if [ ! -s dependency-scan-results.json ] || ! jq empty dependency-scan-results.json 2>/dev/null; then
+                echo '{"vulnerabilities": []}' > dependency-scan-results.json
+              fi
+              
+              snyk code test --json --severity-threshold=${{ inputs.severity-threshold }} > code-scan-results.json || true
+              if [ ! -s code-scan-results.json ] || ! jq empty code-scan-results.json 2>/dev/null; then
+                echo '{"vulnerabilities": []}' > code-scan-results.json
+              fi
             else
               echo "WARNING: No Snyk token provided, skipping Snyk scan"
               echo '{"vulnerabilities": []}' > dependency-scan-results.json
