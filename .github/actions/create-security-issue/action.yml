@@ -87,6 +87,62 @@ runs:
           issueBody += `## Detected Vulnerabilities\n\n`;
           
           console.log('INFO: Processing individual vulnerability details for issue body');
+          
+          // Detect language and scanner from first vulnerability
+          const firstVuln = vulnData[0] || {};
+          const detectedLanguage = firstVuln.language || 'unknown';
+          const detectedScanner = firstVuln.scanner || 'unknown';
+          
+          // Determine appropriate fix command prefix based on language
+          let fixCommandPrefix = 'npm install';
+          let packageManagerName = 'npm';
+          
+          switch(detectedLanguage) {
+            case 'nodejs':
+              fixCommandPrefix = 'npm install';
+              packageManagerName = 'npm/yarn';
+              break;
+            case 'python':
+              fixCommandPrefix = 'pip install';
+              packageManagerName = 'pip';
+              break;
+            case 'rust':
+              fixCommandPrefix = 'cargo update';
+              packageManagerName = 'cargo';
+              break;
+            case 'scala':
+              fixCommandPrefix = '# Update version in build.sbt or build.sc for';
+              packageManagerName = 'sbt/Mill';
+              break;
+            case 'java':
+              fixCommandPrefix = '# Update version in pom.xml or build.gradle for';
+              packageManagerName = 'Maven/Gradle';
+              break;
+            case 'go':
+              fixCommandPrefix = 'go get';
+              packageManagerName = 'go modules';
+              break;
+            case 'ruby':
+              fixCommandPrefix = 'bundle update';
+              packageManagerName = 'bundler';
+              break;
+            case 'php':
+              fixCommandPrefix = 'composer require';
+              packageManagerName = 'composer';
+              break;
+            case 'dotnet':
+              fixCommandPrefix = 'dotnet add package';
+              packageManagerName = 'NuGet';
+              break;
+            default:
+              fixCommandPrefix = '# Update package';
+              packageManagerName = 'package manager';
+          }
+          
+          issueBody += `**Language:** ${detectedLanguage}\n`;
+          issueBody += `**Scanner:** ${detectedScanner}\n`;
+          issueBody += `**Package Manager:** ${packageManagerName}\n\n`;
+          
           for (const vuln of vulnData) {
             const vulnId = vuln.id || 'unknown';
             const vulnTitle = vuln.title || 'Unknown Vulnerability';
@@ -112,9 +168,24 @@ runs:
             issueBody += `**Fix Command Needed:**\n`;
             issueBody += `\`\`\`bash\n`;
             if (isUpgradable && fixedVersion !== 'No direct fix available') {
-              issueBody += `npm install ${packageName}@${fixedVersion}\n`;
+              if (detectedLanguage === 'java' || detectedLanguage === 'scala') {
+                issueBody += `${fixCommandPrefix} ${packageName}\n`;
+                issueBody += `# Then update version to ${fixedVersion} in your build file\n`;
+              } else if (detectedLanguage === 'rust') {
+                issueBody += `${fixCommandPrefix} -p ${packageName}\n`;
+              } else if (detectedLanguage === 'go') {
+                issueBody += `${fixCommandPrefix} ${packageName}@${fixedVersion}\n`;
+              } else {
+                issueBody += `${fixCommandPrefix} ${packageName}@${fixedVersion}\n`;
+              }
             } else {
-              issueBody += `npm update ${packageName}\n`;
+              if (detectedLanguage === 'java' || detectedLanguage === 'scala') {
+                issueBody += `${fixCommandPrefix} ${packageName}\n`;
+              } else if (detectedLanguage === 'rust') {
+                issueBody += `${fixCommandPrefix} -p ${packageName}\n`;
+              } else {
+                issueBody += `${fixCommandPrefix} ${packageName}\n`;
+              }
             }
             issueBody += `\`\`\`\n\n`;
             issueBody += `---\n\n`;
@@ -130,11 +201,13 @@ runs:
           issueBody += `## GitHub Copilot Assistance Request\n\n`;
           issueBody += `@github-copilot please analyze and fix the ${vulnCount} security vulnerabilities detected in this scan:\n\n`;
           issueBody += `### Primary Objectives:\n`;
-          issueBody += `1. **Immediate Fixes:** Provide specific npm/yarn commands for each vulnerability\n`;
+          issueBody += `1. **Immediate Fixes:** Provide specific ${packageManagerName} commands for each vulnerability\n`;
           issueBody += `2. **Risk Assessment:** Evaluate the security impact of each vulnerability\n`;
           issueBody += `3. **Compatibility Analysis:** Check for breaking changes in proposed fixes\n`;
           issueBody += `4. **Testing Strategy:** Recommend verification steps for each fix\n`;
           issueBody += `5. **Alternative Solutions:** Suggest alternatives if direct updates aren't safe\n\n`;
+          issueBody += `**Project Language:** ${detectedLanguage}\n`;
+          issueBody += `**Package Manager:** ${packageManagerName}\n\n`;
           
           issueBody += `*This issue was automatically created by the AI Security Scan workflow on ${new Date().toISOString()}*\n`;
           issueBody += `*Scan run: ${{ inputs.run-id }}*\n`;

@@ -2,6 +2,43 @@
 
 ⚠️ **WARNING: This application contains intentional security vulnerabilities for educational purposes only. DO NOT deploy to production environments!** ⚠️
 
+## 🌟 **NEW: Multi-Language Security Scanning Solution**
+
+This repository now includes a **universal, automated security scanning solution** that works across multiple programming languages and repositories!
+
+### 🚀 Key Features:
+- ✅ **Auto-detects 9+ languages** (Node.js, Python, Rust, Scala, Java, Go, .NET, Ruby, PHP)
+- ✅ **Works without Snyk** - uses free, language-specific scanners
+- ✅ **Zero configuration** - drop into any repository and it just works
+- ✅ **Creates GitHub issues** with language-appropriate fix commands
+- ✅ **GitHub Copilot integration** for AI-assisted vulnerability fixes
+- ✅ **Cross-repository compatible** - use in unlimited repos
+
+### 📖 Quick Links:
+- **[Multi-Language Usage Guide](./MULTI_LANGUAGE_USAGE.md)** - How to use in any language
+- **[Generic Solution Summary](./GENERIC_SOLUTION_SUMMARY.md)** - What changed and why
+- **[Composite Actions Reference](./COMPOSITE_ACTIONS_REFERENCE.md)** - Technical details
+
+### 🎯 Use in Your Repository:
+```yaml
+# .github/workflows/security.yml
+name: Security Scan
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly
+  workflow_dispatch:
+
+jobs:
+  scan:
+    uses: YOUR-ORG/ai-bug-fix/.github/workflows/security-scan-reusable.yml@main
+    secrets:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # That's it! Works for Node.js, Python, Rust, Scala, Go, Java, .NET, Ruby, PHP automatically
+```
+
+---
+
 ## Overview
 
 This is a deliberately vulnerable React application with a Node.js/Express backend designed to help developers learn about common web application security vulnerabilities and how to identify and fix them.

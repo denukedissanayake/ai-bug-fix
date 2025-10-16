@@ -3,16 +3,26 @@ name: Reusable Security Vulnerability Scan
 on:
   workflow_call:
     inputs:
-      node-version:
-        description: 'Node.js version to use'
-        required: false
-        type: string
-        default: '18'
       working-directory:
         description: 'Directory to run scans in'
         required: false
         type: string
         default: '.'
+      language:
+        description: 'Programming language (auto, nodejs, python, rust, scala, java, go, dotnet, ruby, php)'
+        required: false
+        type: string
+        default: 'auto'
+      scanner:
+        description: 'Scanner to use (auto, snyk, npm-audit, pip-audit, cargo-audit, trivy, etc.)'
+        required: false
+        type: string
+        default: 'auto'
+      severity-threshold:
+        description: 'Minimum severity level to report (low, medium, high, critical)'
+        required: false
+        type: string
+        default: 'low'
       create-issue:
         description: 'Whether to create a GitHub issue for vulnerabilities'
         required: false
@@ -20,8 +30,8 @@ on:
         default: true
     secrets:
       SNYK_TOKEN:
-        description: 'Snyk API token for authentication'
-        required: true
+        description: 'Snyk API token for authentication (optional if using other scanners)'
+        required: false
       GH_TOKEN:
         description: 'GitHub token with permissions to create issues'
         required: false
@@ -51,6 +61,8 @@ jobs:
     outputs:
       vulnerabilities-found: ${{ steps.process.outputs.vulnerability-count }}
       has-vulnerabilities: ${{ steps.process.outputs.has-vulnerabilities }}
+      detected-language: ${{ steps.scan.outputs.detected-language }}
+      scanner-used: ${{ steps.scan.outputs.scanner-used }}
     
     steps:
       - name: Checkout code
@@ -61,8 +73,10 @@ jobs:
         uses: ./.github/actions/scan-vulnerabilities
         with:
           snyk-token: ${{ secrets.SNYK_TOKEN }}
-          node-version: ${{ inputs.node-version }}
           working-directory: ${{ inputs.working-directory }}
+          language: ${{ inputs.language }}
+          scanner: ${{ inputs.scanner }}
+          severity-threshold: ${{ inputs.severity-threshold }}
 
       - name: Process vulnerabilities
         id: process
@@ -70,6 +84,8 @@ jobs:
         with:
           scan-results-path: ${{ steps.scan.outputs.scan-results-path }}
           repository: ${{ github.repository }}
+          language: ${{ steps.scan.outputs.detected-language }}
+          scanner: ${{ steps.scan.outputs.scanner-used }}
 
       - name: Upload vulnerability artifacts
         uses: actions/upload-artifact@v4
