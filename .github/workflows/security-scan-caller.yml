@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   call-security-scan:
-    uses: ./.github/workflows/security-scan-reusable.yml
+    uses: denukedissanayake/security-workflows/.github/workflows/security-scan-reusable.yml@main
     with:
       language: 'auto'  # Auto-detect project language (nodejs, python, rust, scala, java, go, etc.)
       scanner: 'auto'   # Auto-select best scanner for detected language
