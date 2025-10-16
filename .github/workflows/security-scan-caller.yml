@@ -1,0 +1,32 @@
+name: Security Scan Caller
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # Run daily at 2 AM
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  actions: read
+  security-events: write
+
+jobs:
+  call-security-scan:
+    uses: denukedissanayake/security-workflows/.github/workflows/security-scan-reusable.yml@main
+    with:
+      language: 'auto'  # Auto-detect project language (nodejs, python, rust, scala, java, go, etc.)
+      scanner: 'auto'   # Auto-select best scanner for detected language
+      severity-threshold: 'low'  # Report all severities
+      working-directory: '.'
+      create-issue: true
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
