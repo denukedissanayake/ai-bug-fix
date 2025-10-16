@@ -1,0 +1,210 @@
+name: 'Process Vulnerabilities'
+description: 'Processes scan results from multiple scanners and generates vulnerability reports'
+author: 'Your Organization'
+
+inputs:
+  scan-results-path:
+    description: 'Path to the scan results JSON file'
+    required: true
+    default: 'full-scan-results.json'
+  repository:
+    description: 'Repository name (owner/repo format)'
+    required: true
+  language:
+    description: 'Programming language of the scanned project'
+    required: false
+    default: 'auto'
+  scanner:
+    description: 'Scanner tool that was used'
+    required: false
+    default: 'auto'
+
+outputs:
+  vulnerability-count:
+    description: 'Number of vulnerabilities found'
+    value: ${{ steps.extract.outputs.fixable_count }}
+  has-vulnerabilities:
+    description: 'Whether vulnerabilities were found'
+    value: ${{ steps.extract.outputs.fixable_count > 0 }}
+  detailed-results-path:
+    description: 'Path to detailed vulnerabilities JSON'
+    value: 'detailed-vulnerabilities.json'
+  report-path:
+    description: 'Path to vulnerability report markdown'
+    value: 'vulnerability-context.md'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Extract high-risk vulnerabilities and generate summary
+      shell: bash
+      run: |
+        echo "INFO: Starting vulnerability data extraction and processing"
+        
+        # Check if scan results exist and are valid
+        if [ ! -f "${{ inputs.scan-results-path }}" ] || [ ! -s "${{ inputs.scan-results-path }}" ]; then
+          echo "WARNING: No scan results found, creating empty vulnerability dataset"
+          echo '{"vulnerabilities": [], "summary": {"total": 0}}' > ${{ inputs.scan-results-path }}
+        fi
+        
+        # Extract scanner and language info from results
+        SCANNER=$(jq -r '.summary.scanner // "unknown"' ${{ inputs.scan-results-path }} 2>/dev/null || echo "${{ inputs.scanner }}")
+        LANGUAGE=$(jq -r '.summary.language // "unknown"' ${{ inputs.scan-results-path }} 2>/dev/null || echo "${{ inputs.language }}")
+        
+        # Extract all vulnerabilities for display
+        echo "INFO: Extracting all vulnerabilities"
+        jq '.vulnerabilities[]? | {title: .title, severity: .severity, package: .packageName, version: .version, identifiers: .identifiers}' ${{ inputs.scan-results-path }} 2>/dev/null || echo "No vulnerabilities found"
+        
+        # Generate vulnerability summary
+        echo "## Security Vulnerability Scan Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Scan Date:** $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "**Language:** $LANGUAGE" >> $GITHUB_STEP_SUMMARY
+        echo "**Scanner:** $SCANNER" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        HIGH_COUNT=$(jq '[.vulnerabilities[]? | select(.severity == "high")] | length' ${{ inputs.scan-results-path }} 2>/dev/null || echo "0")
+        CRITICAL_COUNT=$(jq '[.vulnerabilities[]? | select(.severity == "critical")] | length' ${{ inputs.scan-results-path }} 2>/dev/null || echo "0")
+        MEDIUM_COUNT=$(jq '[.vulnerabilities[]? | select(.severity == "medium")] | length' ${{ inputs.scan-results-path }} 2>/dev/null || echo "0")
+        LOW_COUNT=$(jq '[.vulnerabilities[]? | select(.severity == "low")] | length' ${{ inputs.scan-results-path }} 2>/dev/null || echo "0")
+        TOTAL_COUNT=$(jq '[.vulnerabilities[]?] | length' ${{ inputs.scan-results-path }} 2>/dev/null || echo "0")
+        
+        echo "**Total Vulnerabilities:** $TOTAL_COUNT" >> $GITHUB_STEP_SUMMARY
+        echo "**Critical Vulnerabilities:** $CRITICAL_COUNT" >> $GITHUB_STEP_SUMMARY
+        echo "**High Vulnerabilities:** $HIGH_COUNT" >> $GITHUB_STEP_SUMMARY
+        echo "**Medium Vulnerabilities:** $MEDIUM_COUNT" >> $GITHUB_STEP_SUMMARY
+        echo "**Low Vulnerabilities:** $LOW_COUNT" >> $GITHUB_STEP_SUMMARY
+        
+        # Create filtered results for all vulnerabilities
+        jq '.vulnerabilities[]?' ${{ inputs.scan-results-path }} > snyk-results.json 2>/dev/null || echo "[]" > snyk-results.json
+
+    - name: Extract fixable vulnerabilities
+      id: extract
+      shell: bash
+      run: |
+        echo "INFO: Processing vulnerability data for fixable issues"
+        
+        # Get scanner and language from scan results
+        SCANNER=$(jq -r '.summary.scanner // "unknown"' ${{ inputs.scan-results-path }} 2>/dev/null || echo "${{ inputs.scanner }}")
+        LANGUAGE=$(jq -r '.summary.language // "unknown"' ${{ inputs.scan-results-path }} 2>/dev/null || echo "${{ inputs.language }}")
+        
+        echo "INFO: Filtering vulnerabilities (Scanner: $SCANNER, Language: $LANGUAGE)"
+        jq -c '.vulnerabilities[]? // [] | {
+          id: (.id // "unknown"),
+          title: (.title // "Unknown Vulnerability"),
+          severity: (.severity // "unknown"),
+          packageName: (.packageName // "unknown"),
+          version: (.version // "unknown"),
+          nearestFixedInVersion: (.nearestFixedInVersion // null),
+          isUpgradable: (.isUpgradable // false),
+          isPatchable: (.isPatchable // false),
+          upgradePath: (.upgradePath // []),
+          description: (.description // "No description available"),
+          references: (.references // []),
+          CVSSv3: (.CVSSv3 // null),
+          from: (.from // []),
+          language: "'"$LANGUAGE"'",
+          scanner: "'"$SCANNER"'"
+        }' ${{ inputs.scan-results-path }} 2>/dev/null | jq -s '.' > detailed-vulnerabilities.json || echo "[]" > detailed-vulnerabilities.json
+        
+        VULN_COUNT=$(jq 'length' detailed-vulnerabilities.json 2>/dev/null | head -n 1 | tr -d '\n\r' || echo "0")
+        
+        if ! [[ "$VULN_COUNT" =~ ^[0-9]+$ ]]; then
+          echo "WARNING: Invalid vulnerability count detected, setting to 0"
+          VULN_COUNT=0
+        fi
+        echo "fixable_count=$VULN_COUNT" >> $GITHUB_OUTPUT
+        echo "INFO: Identified $VULN_COUNT vulnerabilities requiring attention"
+        
+        echo "INFO: Generating comprehensive vulnerability analysis report"
+        echo "# Security Vulnerability Analysis Report" > vulnerability-context.md
+        echo "" >> vulnerability-context.md
+        echo "**Project:** ${{ inputs.repository }}" >> vulnerability-context.md
+        echo "**Scan Date:** $(date)" >> vulnerability-context.md
+        echo "**Language:** $LANGUAGE" >> vulnerability-context.md
+        echo "**Scanner:** $SCANNER" >> vulnerability-context.md
+        echo "**Total Vulnerabilities:** $VULN_COUNT" >> vulnerability-context.md
+        echo "" >> vulnerability-context.md
+        
+        echo "## Detected Vulnerabilities" >> vulnerability-context.md
+        echo "" >> vulnerability-context.md
+        
+        if [ "$VULN_COUNT" -gt 0 ] 2>/dev/null; then
+          echo "INFO: Processing detailed vulnerability information for $VULN_COUNT vulnerabilities"
+          
+          # Generate fix commands based on language
+          case "$LANGUAGE" in
+            nodejs)
+              FIX_COMMAND_PREFIX="npm install"
+              ;;
+            python)
+              FIX_COMMAND_PREFIX="pip install"
+              ;;
+            rust)
+              FIX_COMMAND_PREFIX="cargo update"
+              ;;
+            scala)
+              FIX_COMMAND_PREFIX="# Update version in build.sbt or build.sc for"
+              ;;
+            java)
+              FIX_COMMAND_PREFIX="# Update version in pom.xml or build.gradle for"
+              ;;
+            go)
+              FIX_COMMAND_PREFIX="go get"
+              ;;
+            ruby)
+              FIX_COMMAND_PREFIX="bundle update"
+              ;;
+            php)
+              FIX_COMMAND_PREFIX="composer require"
+              ;;
+            dotnet)
+              FIX_COMMAND_PREFIX="dotnet add package"
+              ;;
+            *)
+              FIX_COMMAND_PREFIX="# Update package"
+              ;;
+          esac
+          
+          jq -r --arg fix_prefix "$FIX_COMMAND_PREFIX" '.[] | "### \(.title // "Unknown Vulnerability") (\(.severity // "unknown" | ascii_upcase))
+          
+          **Package:** \(.packageName // "unknown")@\(.version // "unknown")
+          **CVE ID:** \(.id // "N/A")
+          **CVSS Score:** \(.CVSSv3 // "N/A")
+          **Current Version:** \(.version // "unknown")
+          **Fixed In:** \(.nearestFixedInVersion // "No direct fix available")
+          **Upgradable:** \(.isUpgradable // false)
+          **Patchable:** \(.isPatchable // false)
+          **Dependency Path:** \(if .from then (.from | if type == "array" then join(" → ") else tostring end) else "Direct dependency" end)
+          
+          **Description:** \(.description // "No description available")
+          
+          **Fix Command:**
+          ```bash
+          \($fix_prefix) \(.packageName)\(if .nearestFixedInVersion and .nearestFixedInVersion != "No direct fix available" then "@\(.nearestFixedInVersion)" else "" end)
+          ```
+          
+          **References:**
+          \(if .references then 
+            (if (.references | type) == "array" then 
+              (.references | map("- \(.)") | join("\n")) 
+            else 
+              "- \(.references)" 
+            end) 
+          else 
+            "No references available" 
+          end)
+          
+          ---
+          "' detailed-vulnerabilities.json >> vulnerability-context.md 2>/dev/null || echo "ERROR: Failed to process vulnerability details" >> vulnerability-context.md
+        else
+          echo "INFO: No vulnerabilities detected in this scan"
+          echo "No vulnerabilities detected." >> vulnerability-context.md
+          echo "" >> vulnerability-context.md
+          echo "STATUS: This project appears to be secure from known vulnerabilities." >> vulnerability-context.md
+        fi
+        echo "SUCCESS: Vulnerability analysis and report generation completed"
+
+branding:
+  icon: 'file-text'
+  color: 'orange'

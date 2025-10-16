@@ -2,6 +2,43 @@
 
 ⚠️ **WARNING: This application contains intentional security vulnerabilities for educational purposes only. DO NOT deploy to production environments!** ⚠️
 
+## 🌟 **NEW: Multi-Language Security Scanning Solution**
+
+This repository now includes a **universal, automated security scanning solution** that works across multiple programming languages and repositories!
+
+### 🚀 Key Features:
+- ✅ **Auto-detects 9+ languages** (Node.js, Python, Rust, Scala, Java, Go, .NET, Ruby, PHP)
+- ✅ **Works without Snyk** - uses free, language-specific scanners
+- ✅ **Zero configuration** - drop into any repository and it just works
+- ✅ **Creates GitHub issues** with language-appropriate fix commands
+- ✅ **GitHub Copilot integration** for AI-assisted vulnerability fixes
+- ✅ **Cross-repository compatible** - use in unlimited repos
+
+### 📖 Quick Links:
+- **[Multi-Language Usage Guide](./MULTI_LANGUAGE_USAGE.md)** - How to use in any language
+- **[Generic Solution Summary](./GENERIC_SOLUTION_SUMMARY.md)** - What changed and why
+- **[Composite Actions Reference](./COMPOSITE_ACTIONS_REFERENCE.md)** - Technical details
+
+### 🎯 Use in Your Repository:
+```yaml
+# .github/workflows/security.yml
+name: Security Scan
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Weekly
+  workflow_dispatch:
+
+jobs:
+  scan:
+    uses: YOUR-ORG/ai-bug-fix/.github/workflows/security-scan-reusable.yml@main
+    secrets:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    # That's it! Works for Node.js, Python, Rust, Scala, Go, Java, .NET, Ruby, PHP automatically
+```
+
+---
+
 ## Overview
 
 This is a deliberately vulnerable React application with a Node.js/Express backend designed to help developers learn about common web application security vulnerabilities and how to identify and fix them.
@@ -284,6 +321,73 @@ echo '<?php system($_GET["cmd"]); ?>' > malicious.php
 - [OWASP Testing Guide](https://owasp.org/www-project-web-security-testing-guide/)
 - [React Security Best Practices](https://snyk.io/blog/10-react-security-best-practices/)
 - [Node.js Security Checklist](https://blog.risingstack.com/node-js-security-checklist/)
+
+## 🤖 Automated Security Scanning
+
+This repository includes a **production-ready, AI-powered security scanning system** that automatically:
+
+- 🔍 Scans for vulnerabilities using Snyk
+- 📊 Generates detailed security reports
+- 🎫 Creates GitHub issues for vulnerabilities
+- 🤖 Assigns issues to GitHub Copilot for AI-powered fix suggestions
+- ⏰ Runs automatically on schedule and on every PR/push
+
+### Quick Start with Security Scanning
+
+The security scanning workflow is already configured and runs automatically. You can also trigger it manually:
+
+```bash
+# Run security scan manually
+gh workflow run security-scan-caller.yml
+
+# Check scan results
+gh run watch
+```
+
+### Documentation
+
+Our security scanning system is fully documented and production-ready:
+
+- **[Quick Start](.github/README.md)** - Get started in 5 minutes
+- **[Complete Guide](WORKFLOW_DOCUMENTATION.md)** - Comprehensive documentation
+- **[API Reference](COMPOSITE_ACTIONS_REFERENCE.md)** - Composite actions reference
+- **[Migration Guide](MIGRATION_GUIDE.md)** - Migrate from monolithic workflows
+- **[Architecture](ARCHITECTURE.md)** - System design and diagrams
+- **[Summary](SUMMARY.md)** - Overview of the modular system
+- **[Index](INDEX.md)** - Documentation navigation
+
+### Reusable Across Repositories
+
+The security scanning system can be imported into any repository:
+
+```yaml
+# .github/workflows/security-scan.yml
+name: Security Scan
+
+on:
+  schedule:
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  security-scan:
+    uses: denukedissanayake/ai-bug-fix/.github/workflows/security-scan-reusable.yml@main
+    with:
+      node-version: '18'
+    secrets:
+      SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      GH_TOKEN: ${{ secrets.GH_TOKEN }}
+```
+
+### Features
+
+- ✅ **Modular Architecture** - 3 focused composite actions
+- ✅ **Reusable Workflow** - Use across unlimited repositories
+- ✅ **Comprehensive Documentation** - 6 detailed guides
+- ✅ **AI-Powered** - GitHub Copilot integration
+- ✅ **Production-Ready** - Error handling, logging, monitoring
+
+---
 
 ## Disclaimer
 

@@ -1,0 +1,374 @@
+name: 'Create Security Issue'
+description: 'Creates a GitHub issue with vulnerability details and assigns to Copilot'
+author: 'Your Organization'
+
+inputs:
+  github-token:
+    description: 'GitHub token with permissions to create issues'
+    required: true
+  vulnerability-data-path:
+    description: 'Path to the detailed vulnerabilities JSON file'
+    required: true
+    default: 'vulnerability-data/detailed-vulnerabilities.json'
+  repository:
+    description: 'Repository name (owner/repo format)'
+    required: true
+  run-id:
+    description: 'GitHub Actions run ID'
+    required: true
+  server-url:
+    description: 'GitHub server URL'
+    required: true
+    default: 'https://github.com'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create consolidated vulnerability issue
+      uses: actions/github-script@v7
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const fs = require('fs');
+          
+          console.log('INFO: Initializing vulnerability issue creation process');
+          
+          const labelsToCreate = [
+            { name: 'security', description: 'Security vulnerability', color: 'd73a4a' },
+            { name: 'vulnerability', description: 'Security vulnerability found by scan', color: 'b60205' },
+            { name: 'high-priority', description: 'High priority issue', color: 'ff6b6b' },
+            { name: 'critical', description: 'Critical severity issue', color: 'd10000' },
+            { name: 'ai-fix-requested', description: 'AI assistance requested for fix', color: '0052cc' },
+            { name: 'copilot-task', description: 'Task assigned to GitHub Copilot', color: '0366d6' },
+            { name: 'scheduled', description: 'Automatically scheduled task', color: '7057ff' }
+          ];
+          
+          console.log('INFO: Creating required labels for security issue tracking');
+          for (const label of labelsToCreate) {
+            try {
+              await github.rest.issues.createLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                ...label
+              });
+              console.log(`INFO: Successfully created label: ${label.name}`);
+            } catch (error) {
+              if (error.status !== 422) {
+                console.log(`WARNING: Could not create label ${label.name}: ${error.message}`);
+              } else {
+                console.log(`INFO: Label ${label.name} already exists`);
+              }
+            }
+          }
+          
+          console.log('INFO: Checking for vulnerability data file');
+          if (!fs.existsSync('${{ inputs.vulnerability-data-path }}')) {
+            console.log('WARNING: No vulnerability data file found, skipping issue creation');
+            return;
+          }
+          
+          console.log('INFO: Reading vulnerability data from scan results');
+          const vulnData = JSON.parse(fs.readFileSync('${{ inputs.vulnerability-data-path }}', 'utf8'));
+          const vulnCount = vulnData.length;
+          
+          console.log(`INFO: Found ${vulnCount} vulnerabilities to process`);
+          if (vulnCount === 0) {
+            console.log('INFO: No vulnerabilities detected, skipping issue creation');
+            return;
+          }
+          
+          console.log('INFO: Building comprehensive vulnerability issue body');
+          let issueBody = `# Security Vulnerability Analysis Report\n\n`;
+          issueBody += `**Repository:** ${{ inputs.repository }}\n`;
+          issueBody += `**Scan Date:** ${new Date().toISOString()}\n`;
+          issueBody += `**Workflow Run:** [${{ inputs.run-id }}](${{ inputs.server-url }}/${{ inputs.repository }}/actions/runs/${{ inputs.run-id }})\n`;
+          issueBody += `**Total Vulnerabilities:** ${vulnCount}\n\n`;
+          
+          issueBody += `## Detected Vulnerabilities\n\n`;
+          
+          console.log('INFO: Processing individual vulnerability details for issue body');
+          
+          // Detect language and scanner from first vulnerability
+          const firstVuln = vulnData[0] || {};
+          const detectedLanguage = firstVuln.language || 'unknown';
+          const detectedScanner = firstVuln.scanner || 'unknown';
+          
+          // Determine appropriate fix command prefix based on language
+          let fixCommandPrefix = 'npm install';
+          let packageManagerName = 'npm';
+          
+          switch(detectedLanguage) {
+            case 'nodejs':
+              fixCommandPrefix = 'npm install';
+              packageManagerName = 'npm/yarn';
+              break;
+            case 'python':
+              fixCommandPrefix = 'pip install';
+              packageManagerName = 'pip';
+              break;
+            case 'rust':
+              fixCommandPrefix = 'cargo update';
+              packageManagerName = 'cargo';
+              break;
+            case 'scala':
+              fixCommandPrefix = '# Update version in build.sbt or build.sc for';
+              packageManagerName = 'sbt/Mill';
+              break;
+            case 'java':
+              fixCommandPrefix = '# Update version in pom.xml or build.gradle for';
+              packageManagerName = 'Maven/Gradle';
+              break;
+            case 'go':
+              fixCommandPrefix = 'go get';
+              packageManagerName = 'go modules';
+              break;
+            case 'ruby':
+              fixCommandPrefix = 'bundle update';
+              packageManagerName = 'bundler';
+              break;
+            case 'php':
+              fixCommandPrefix = 'composer require';
+              packageManagerName = 'composer';
+              break;
+            case 'dotnet':
+              fixCommandPrefix = 'dotnet add package';
+              packageManagerName = 'NuGet';
+              break;
+            default:
+              fixCommandPrefix = '# Update package';
+              packageManagerName = 'package manager';
+          }
+          
+          issueBody += `**Language:** ${detectedLanguage}\n`;
+          issueBody += `**Scanner:** ${detectedScanner}\n`;
+          issueBody += `**Package Manager:** ${packageManagerName}\n\n`;
+          
+          for (const vuln of vulnData) {
+            const vulnId = vuln.id || 'unknown';
+            const vulnTitle = vuln.title || 'Unknown Vulnerability';
+            const severity = (vuln.severity || 'unknown').toUpperCase();
+            const packageName = vuln.packageName || 'unknown';
+            const version = vuln.version || 'unknown';
+            const fixedVersion = vuln.nearestFixedInVersion || 'No direct fix available';
+            const description = vuln.description || 'No description available';
+            const isUpgradable = vuln.isUpgradable || false;
+            const isPatchable = vuln.isPatchable || false;
+            const cvssScore = vuln.CVSSv3 || 'N/A';
+            const dependencyPath = Array.isArray(vuln.from) ? vuln.from.join(' → ') : 'Direct dependency';
+            
+            issueBody += `### ${vulnTitle} in ${packageName}@${version} (${severity})\n\n`;
+            issueBody += `**Package:** \`${packageName}@${version}\`\n`;
+            issueBody += `**CVE ID:** ${vulnId}\n`;
+            issueBody += `**CVSS Score:** ${cvssScore}\n`;
+            issueBody += `**Fixed In:** \`${fixedVersion}\`\n`;
+            issueBody += `**Upgradable:** ${isUpgradable}\n`;
+            issueBody += `**Patchable:** ${isPatchable}\n`;
+            issueBody += `**Dependency Path:** ${dependencyPath}\n\n`;
+            issueBody += `**Description:** ${description}\n\n`;
+            issueBody += `**Fix Command Needed:**\n`;
+            issueBody += `\`\`\`bash\n`;
+            if (isUpgradable && fixedVersion !== 'No direct fix available') {
+              if (detectedLanguage === 'java' || detectedLanguage === 'scala') {
+                issueBody += `${fixCommandPrefix} ${packageName}\n`;
+                issueBody += `# Then update version to ${fixedVersion} in your build file\n`;
+              } else if (detectedLanguage === 'rust') {
+                issueBody += `${fixCommandPrefix} -p ${packageName}\n`;
+              } else if (detectedLanguage === 'go') {
+                issueBody += `${fixCommandPrefix} ${packageName}@${fixedVersion}\n`;
+              } else {
+                issueBody += `${fixCommandPrefix} ${packageName}@${fixedVersion}\n`;
+              }
+            } else {
+              if (detectedLanguage === 'java' || detectedLanguage === 'scala') {
+                issueBody += `${fixCommandPrefix} ${packageName}\n`;
+              } else if (detectedLanguage === 'rust') {
+                issueBody += `${fixCommandPrefix} -p ${packageName}\n`;
+              } else {
+                issueBody += `${fixCommandPrefix} ${packageName}\n`;
+              }
+            }
+            issueBody += `\`\`\`\n\n`;
+            issueBody += `---\n\n`;
+          }
+          
+          issueBody += `## Action Items\n\n`;
+          issueBody += `- [ ] Review all detected vulnerabilities\n`;
+          issueBody += `- [ ] Prioritize critical and high severity vulnerabilities\n`;
+          issueBody += `- [ ] Apply fixes suggested by GitHub Copilot\n`;
+          issueBody += `- [ ] Test fixes in development environment\n`;
+          issueBody += `- [ ] Deploy fixes to production\n\n`;
+          
+          issueBody += `## GitHub Copilot Assistance Request\n\n`;
+          issueBody += `@github-copilot please analyze and fix the ${vulnCount} security vulnerabilities detected in this scan:\n\n`;
+          issueBody += `### Primary Objectives:\n`;
+          issueBody += `1. **Immediate Fixes:** Provide specific ${packageManagerName} commands for each vulnerability\n`;
+          issueBody += `2. **Risk Assessment:** Evaluate the security impact of each vulnerability\n`;
+          issueBody += `3. **Compatibility Analysis:** Check for breaking changes in proposed fixes\n`;
+          issueBody += `4. **Testing Strategy:** Recommend verification steps for each fix\n`;
+          issueBody += `5. **Alternative Solutions:** Suggest alternatives if direct updates aren't safe\n\n`;
+          issueBody += `**Project Language:** ${detectedLanguage}\n`;
+          issueBody += `**Package Manager:** ${packageManagerName}\n\n`;
+          
+          issueBody += `*This issue was automatically created by the AI Security Scan workflow on ${new Date().toISOString()}*\n`;
+          issueBody += `*Scan run: ${{ inputs.run-id }}*\n`;
+          
+          const labels = ['security', 'vulnerability', 'ai-fix-requested', 'copilot-task', 'scheduled'];
+          const hasCritical = vulnData.some(v => v.severity === 'critical');
+          const hasHigh = vulnData.some(v => v.severity === 'high');
+          
+          if (hasCritical) {
+            labels.push('critical', 'high-priority');
+          } else if (hasHigh) {
+            labels.push('high-priority');
+          }
+          
+          const issueTitle = `Security Vulnerability Scan - ${new Date().toISOString().split('T')[0]} - ${vulnCount} vulnerabilities found`;
+          
+          console.log('INFO: Creating GitHub issue for security vulnerabilities');
+          try {
+            const issue = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: issueTitle,
+              body: issueBody,
+              labels: labels
+            });
+            
+            console.log(`SUCCESS: Created security vulnerability issue #${issue.data.number}`);
+            const issueNumber = issue.data.number;
+            
+            console.log('INFO: Attempting to assign issue to GitHub Copilot SWE agent');
+            try {
+              const suggestedActorsQuery = `
+                query($owner: String!, $repo: String!) {
+                  repository(owner: $owner, name: $repo) {
+                    suggestedActors(capabilities: [CAN_BE_ASSIGNED], first: 100) {
+                      nodes {
+                        login
+                        __typename
+                        ... on Bot {
+                          id
+                        }
+                        ... on User {
+                          id
+                        }
+                      }
+                    }
+                  }
+                }
+              `;
+              
+              const actorsResult = await github.graphql(suggestedActorsQuery, {
+                owner: context.repo.owner,
+                repo: context.repo.repo
+              });
+              
+              const copilotActor = actorsResult.repository.suggestedActors.nodes.find(
+                node => node.login === 'copilot-swe-agent'
+              );
+              
+              if (copilotActor) {
+                console.log(`INFO: Found GitHub Copilot SWE agent with ID: ${copilotActor.id}`);
+                const issueQuery = `
+                  query($owner: String!, $repo: String!, $issueNumber: Int!) {
+                    repository(owner: $owner, name: $repo) {
+                      issue(number: $issueNumber) {
+                        id
+                      }
+                    }
+                  }
+                `;
+                
+                const issueResult = await github.graphql(issueQuery, {
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issueNumber: issueNumber
+                });
+                
+                const assignMutation = `
+                  mutation($issueId: ID!, $actorId: ID!) {
+                    replaceActorsForAssignable(input: {assignableId: $issueId, actorIds: [$actorId]}) {
+                      assignable {
+                        ... on Issue {
+                          id
+                          title
+                          assignees(first: 10) {
+                            nodes {
+                              login
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                `;
+                
+                await github.graphql(assignMutation, {
+                  issueId: issueResult.repository.issue.id,
+                  actorId: copilotActor.id
+                });
+                
+                console.log(`SUCCESS: Assigned issue #${issueNumber} to GitHub Copilot SWE agent`);
+              } else {
+                console.log('WARNING: GitHub Copilot SWE agent not found or not available for assignment');
+              }
+            } catch (assignError) {
+              console.log(`WARNING: Failed to assign issue to Copilot: ${assignError.message}`);
+            }
+            
+            console.log('INFO: Attempting to pin the security issue');
+            try {
+              await github.graphql(`
+                mutation($issueId: ID!) {
+                  pinIssue(input: {issueId: $issueId}) {
+                    issue {
+                      id
+                    }
+                  }
+                }
+              `, {
+                issueId: issue.data.node_id
+              });
+              console.log('SUCCESS: Pinned security vulnerability issue for visibility');
+            } catch (pinError) {
+              console.log(`WARNING: Could not pin issue (may lack permissions): ${pinError.message}`);
+            }
+            
+            console.log('SUCCESS: Completed vulnerability issue creation and setup');
+          } catch (error) {
+            console.error('ERROR: Failed to create consolidated vulnerability issue:', error);
+            throw error;
+          }
+
+    - name: Issue creation summary
+      if: always()
+      shell: bash
+      run: |
+        VULN_COUNT=$(jq 'length' ${{ inputs.vulnerability-data-path }} 2>/dev/null || echo "0")
+        
+        echo "## GitHub Security Issue Created" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Vulnerabilities Found:** $VULN_COUNT" >> $GITHUB_STEP_SUMMARY
+        echo "**Issue Creation Date:** $(date)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### GitHub Copilot Integration" >> $GITHUB_STEP_SUMMARY
+        echo "The security vulnerability issue includes:" >> $GITHUB_STEP_SUMMARY
+        echo "- **Automatic Assignment:** Issue assigned to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
+        echo "- **Specific Fix Requests:** Detailed Copilot assistance requests" >> $GITHUB_STEP_SUMMARY
+        echo "- **Actionable Tasks:** Clear requirements for fix commands" >> $GITHUB_STEP_SUMMARY
+        echo "- **Vulnerability Analysis:** Comprehensive security context" >> $GITHUB_STEP_SUMMARY
+        echo "- **Priority Classification:** Critical/High priority labeling" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Labels Applied:** \`security\`, \`vulnerability\`, \`ai-fix-requested\`, \`copilot-task\`, \`scheduled\`" >> $GITHUB_STEP_SUMMARY
+        echo "**Priority Labels:** \`critical\`, \`high-priority\` (based on severity)" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Consolidated Report" >> $GITHUB_STEP_SUMMARY
+        echo "A single consolidated vulnerability report issue has been created with:" >> $GITHUB_STEP_SUMMARY
+        echo "- Complete vulnerability analysis for Copilot review" >> $GITHUB_STEP_SUMMARY
+        echo "- Automatic assignment to GitHub Copilot SWE agent" >> $GITHUB_STEP_SUMMARY
+        echo "- Comprehensive fix request with specific objectives" >> $GITHUB_STEP_SUMMARY
+        echo "- Expected response format and priority classification" >> $GITHUB_STEP_SUMMARY
+
+branding:
+  icon: 'alert-circle'
+  color: 'red'
