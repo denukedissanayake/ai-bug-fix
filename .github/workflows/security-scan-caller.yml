@@ -22,7 +22,9 @@ jobs:
   call-security-scan:
     uses: ./.github/workflows/security-scan-reusable.yml
     with:
-      node-version: '18'
+      language: 'auto'  # Auto-detect project language (nodejs, python, rust, scala, java, go, etc.)
+      scanner: 'auto'   # Auto-select best scanner for detected language
+      severity-threshold: 'low'  # Report all severities
       working-directory: '.'
       create-issue: true
     secrets:
