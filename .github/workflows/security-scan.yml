@@ -2,8 +2,8 @@ name: Fix security vulnerabilities with AI
 
 on:
   # Trigger on cron schedule (runs daily at 2 AM UTC)
-  schedule:
-    - cron: '0 2 * * *'
+  # schedule:
+    # - cron: '0 2 * * *'
   
   # Trigger on pull requests
   pull_request:
