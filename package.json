@@ -18,7 +18,7 @@
     "serialize-javascript": "^5.0.1",
     "express-session": "^1.17.2",
     "bcrypt": "^5.0.1",
-    "multer": "^1.4.3",
+    "multer": "^2.0.2",
     "concurrently": "^6.3.0"
   },
   "devDependencies": {
